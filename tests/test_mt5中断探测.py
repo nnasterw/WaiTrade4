@@ -25,6 +25,8 @@ def test_仅中断甲的进程组且乙仍独立完成(tmp_path: Path) -> None:
     assert 结果.被中断时仍运行 is True
     assert 结果.未中断完成 is True
     assert 结果.通过 is True
+    assert 结果.被中断Wine服务进程号 == ()
+    assert 结果.未中断Wine服务进程号 == ()
 
 
 def test_参数必须为正(tmp_path: Path) -> None:
