@@ -36,6 +36,7 @@ def test_探测配置强制真实点和代理且报告写入本次暂存目录(t
     assert "Login=277656700" in 内容
     assert "Server=Exness-MT5Trial5" in 内容
     assert "ProxyAddress=127.0.0.1:7897" in 内容
+    assert "ProxyType=1" in 内容
     assert "Model=4" in 内容
     assert "Deposit=300" in 内容
     assert "FromDate=2026.05.01" in 内容
@@ -62,6 +63,21 @@ def test_探测配置拒绝缺失登录账号或服务器(tmp_path) -> None:
             assert "登录账号和服务器" in str(异常)
         else:
             raise AssertionError("应拒绝缺失 MT5 登录信息")
+
+
+def test_探测配置拒绝非SOCKS5代理类型(tmp_path) -> None:
+    配置 = replace(_配置(tmp_path), 代理类型=0)
+    配置.终端目录.mkdir()
+    (配置.终端目录 / "terminal64.exe").write_bytes(b"")
+    暂存目录 = tmp_path / "暂存"
+    暂存目录.mkdir()
+
+    try:
+        生成MT5探测配置(配置, 暂存目录)
+    except ValueError as 异常:
+        assert "SOCKS5" in str(异常)
+    else:
+        raise AssertionError("应拒绝可能直连的代理类型")
 
 
 def test_探测配置拒绝不存在的显式参数文件(tmp_path) -> None:
