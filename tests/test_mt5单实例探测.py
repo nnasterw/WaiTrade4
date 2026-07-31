@@ -7,6 +7,7 @@ from wt4.experiment import 实验输入
 from wt4.mt5单实例探测 import (
     单实例MT5探测执行器,
     解析MT5实际测试区间,
+    解析MT5代理同步诊断,
     解析MT5生命周期,
     解析MT5连接端点,
     通过SOCKS5探测端点,
@@ -50,6 +51,7 @@ def test_探测会保留共享状态前后证据即使报告缺失(tmp_path) -> 
     assert (暂存 / "MT5日志证据.txt").read_text(encoding="utf-8") == ""
     assert json.loads((暂存 / "共享状态差异.json").read_text(encoding="utf-8")) == {"删除": [], "修改": [], "新增": []}
     assert 结果.结果["MT5生命周期"]["交易服务器未同步标记"] == []
+    assert 结果.结果["MT5代理同步诊断"]["结论"] == "未发现SOCKS5连接证据"
 
 
 def test_报告缺失时仍返回代理和交易服务器同步诊断(tmp_path) -> None:
@@ -115,6 +117,39 @@ Tester\tautomatical testing started
         "terminal is not synchronized with the trade server before start automatical testing",
     ]
     assert 生命周期["完整"] is False
+
+
+def test_代理同步诊断区分_socks5_connect_与_mt5_服务器未同步() -> None:
+    日志 = """
+DG\t0\t20:23:44.439\tProxy\tconnecting through SOCKS5 proxy 127.0.0.1:7897
+MO\t2\t20:24:25.568\tTester\tnot synchronized with trade server
+PE\t2\t20:24:25.810\tTester\tterminal is not synchronized with the trade server before start automatical testing [1]
+"""
+
+    诊断 = 解析MT5代理同步诊断(日志)
+
+    assert 诊断 == {
+        "结论": "SOCKS5已连接但MT5交易服务器未同步",
+        "代理地址": "127.0.0.1:7897",
+        "已授权服务器": [],
+        "访问点": [],
+        "代理至未同步秒数": 41.129,
+    }
+
+
+def test_代理同步诊断接受已授权且已同步的成功链路() -> None:
+    日志 = """
+Network\t'277656700': authorized on Exness-MT5Trial5 through Access Point #5 (ping: 84.17 ms, build 5830)
+Network\t'277656700': terminal synchronized with Exness Technologies Ltd: 0 positions
+"""
+
+    assert 解析MT5代理同步诊断(日志) == {
+        "结论": "MT5交易服务器已同步",
+        "代理地址": None,
+        "已授权服务器": ["Exness-MT5Trial5"],
+        "访问点": [5],
+        "代理至未同步秒数": None,
+    }
 
 
 def test_从_agent_日志提取实际测试区间而不是信任_ini() -> None:

@@ -75,6 +75,50 @@ def _接收完整(连接: socket.socket, 长度: int) -> bytes:
     return bytes(内容)
 
 
+def 解析MT5代理同步诊断(日志证据: str) -> dict[str, object]:
+    """从本轮日志区分 SOCKS5 已接入与 MT5 交易服务器是否真正同步。
+
+    SOCKS5 CONNECT 仅证明代理能建立一个 TCP 隧道，不能替代 MT5 完成
+    授权、访问点选择与终端同步。该诊断只提取日志已经明确写出的事实，
+    不根据代理地址推测远端真实端点。
+    """
+    代理匹配 = list(re.finditer(r"(?im)^.*?\b(\d{2}:\d{2}:\d{2}\.\d{3})\tProxy\tconnecting through SOCKS5 proxy\s+([^\s]+)", 日志证据))
+    未同步匹配 = list(re.finditer(r"(?im)^.*?\b(\d{2}:\d{2}:\d{2}\.\d{3})\tTester\tnot synchronized with trade server", 日志证据))
+    授权匹配 = list(re.finditer(r"(?im)authorized on\s+([^\s]+)\s+through Access Point #(\d+)", 日志证据))
+    已同步 = bool(re.search(r"(?im)terminal synchronized with", 日志证据))
+
+    代理地址 = 代理匹配[-1].group(2) if 代理匹配 else None
+    已授权服务器 = sorted({匹配.group(1) for 匹配 in 授权匹配})
+    访问点 = sorted({int(匹配.group(2)) for 匹配 in 授权匹配})
+    延迟: float | None = None
+    if 代理匹配 and 未同步匹配:
+        代理时间 = _解析MT5日志时刻(代理匹配[-1].group(1))
+        首个未同步时间 = _解析MT5日志时刻(未同步匹配[0].group(1))
+        if 首个未同步时间 >= 代理时间:
+            延迟 = round(首个未同步时间 - 代理时间, 3)
+
+    if 已同步:
+        结论 = "MT5交易服务器已同步"
+    elif 代理地址 and 未同步匹配:
+        结论 = "SOCKS5已连接但MT5交易服务器未同步"
+    elif 代理地址:
+        结论 = "SOCKS5已连接，等待MT5同步证据"
+    else:
+        结论 = "未发现SOCKS5连接证据"
+    return {
+        "结论": 结论,
+        "代理地址": 代理地址,
+        "已授权服务器": 已授权服务器,
+        "访问点": 访问点,
+        "代理至未同步秒数": 延迟,
+    }
+
+
+def _解析MT5日志时刻(时刻: str) -> float:
+    时, 分, 秒 = 时刻.split(":")
+    return int(时) * 3600 + int(分) * 60 + float(秒)
+
+
 def 解析MT5生命周期(日志证据: str) -> dict[str, object]:
     """只接受本轮新增日志中的完整 Tester 生命周期，避免旧日志误判成功。"""
     小写日志 = 日志证据.lower()
@@ -192,12 +236,14 @@ class 单实例MT5探测执行器:
         日志证据 = self._保留本次日志证据(暂存目录, 运行前日志)
         日志文本 = (暂存目录 / 日志证据).read_text(encoding="utf-8")
         生命周期 = 解析MT5生命周期(日志文本)
+        代理同步诊断 = 解析MT5代理同步诊断(日志文本)
         实际测试区间 = 解析MT5实际测试区间(日志文本)
         工件 = dict(结果.工件)
         结果数据 = {
             **结果.结果,
             "共享状态差异": 差异,
             "MT5生命周期": 生命周期,
+            "MT5代理同步诊断": 代理同步诊断,
             "MT5实际测试区间": 实际测试区间,
             "参数输入证据哈希": self._参数文件哈希(参数证据, 暂存目录),
             "MT5实际参数路径": str(实际参数路径) if 实际参数路径 else None,
