@@ -10,8 +10,18 @@ from uuid import uuid4
 
 from wt4.mt5后台 import MT5后台进程
 from wt4.mt5执行 import 隔离MT5执行器
-from wt4.mt5单实例探测 import 单实例MT5探测执行器, 解析MT5生命周期, 解析MT5实际测试区间
-from wt4.mt5探测 import MT5短窗口探测配置, 生成MT5探测配置
+from wt4.mt5单实例探测 import (
+    单实例MT5探测执行器,
+    解析MT5生命周期,
+    解析MT5实际测试区间,
+    核验MT5严格SOCKS5链路,
+)
+from wt4.mt5探测 import (
+    MT5短窗口探测配置,
+    写入MT5持久SOCKS5配置,
+    生成MT5探测配置,
+    核验MT5持久SOCKS5配置,
+)
 from wt4.mt5报告 import 报告期望, 解析MT5报告
 from wt4.mt5中断探测 import 两实例中断探测器
 from wt4.mt5能力 import 校验实例隔离
@@ -42,10 +52,26 @@ def _准备实例运行(
         开始日, 结束日, 300, 2000, 账号, 服务器, 代理地址=代理地址, 参数文件路径=参数路径,
     )
     # 复用单实例执行器的实际 Parameter 目录规则，且唯一命名、拒绝覆盖。
+    # 中断实验也必须写入 MT5 实际读取的持久代理配置；不能把一次性
+    # /config: INI 当成网络隔离证据。
     执行器 = 单实例MT5探测执行器(配置, wine, 实例.Wine前缀, 超时秒数)
     执行器._准备参数输入(暂存)
+    持久代理配置 = 写入MT5持久SOCKS5配置(配置)
+    持久代理失败 = 核验MT5持久SOCKS5配置(持久代理配置, 代理地址)
+    if 持久代理失败:
+        raise RuntimeError(f"{名称}实例 MT5 持久 SOCKS5 配置未生效: {持久代理失败}")
+    (暂存 / "mt5-持久代理.ini").write_bytes(持久代理配置.read_bytes())
     ini = 生成MT5探测配置(配置, 暂存)
-    命令 = (str(wine), r"C:\Program Files\MetaTrader 5 Tester\terminal64.exe", f"/config:{单实例MT5探测执行器._mac路径转WineZ盘(ini)}")
+    # 与单实例、重复、并发实验一致：Wine/MT5 仅可访问本地 Agent 和
+    # 环回 SOCKS5；外网连接只能由沙箱外的 Clash/Mihomo 代理建立。
+    命令 = (
+        执行器.沙箱命令,
+        "-p",
+        执行器._禁止直连沙箱配置(),
+        str(wine),
+        r"C:\Program Files\MetaTrader 5 Tester\terminal64.exe",
+        f"/config:{单实例MT5探测执行器._mac路径转WineZ盘(ini)}",
+    )
     日志快照 = 执行器._日志字节快照()
     return MT5后台进程.启动(命令, 暂存, {"WINEPREFIX": str(实例.Wine前缀)}, 暂存), 暂存, 配置, 日志快照
 
@@ -105,7 +131,9 @@ def main() -> None:
     乙暂存, 乙配置, 乙运行前日志 = 启动记录["乙"]
     乙执行器 = 单实例MT5探测执行器(乙配置, 实参.wine, 实例["乙"].Wine前缀, 实参.乙超时秒)
     日志 = 乙执行器._保留本次日志证据(乙暂存, 乙运行前日志)
-    生命周期 = 解析MT5生命周期((乙暂存 / 日志).read_text(encoding="utf-8"))
+    日志文本 = (乙暂存 / 日志).read_text(encoding="utf-8")
+    生命周期 = 解析MT5生命周期(日志文本)
+    严格SOCKS5链路失败 = 核验MT5严格SOCKS5链路(日志文本, 实参.代理地址)
     报告名 = 单实例MT5探测执行器._配置报告名称(乙暂存 / "mt5-探测.ini")
     报告源 = 实例["乙"].终端目录 / f"{报告名}.htm"
     if not 报告源.is_file():
@@ -115,7 +143,7 @@ def main() -> None:
         raise RuntimeError("乙报告封存目标已存在")
     报告目标.write_bytes(报告源.read_bytes())
     报告 = 解析MT5报告(报告目标, 报告期望("WaiTrade_OB", "BTCUSDm", "M1", 实参.乙开始日, 实参.乙结束日, Decimal("300.00")))
-    实际区间 = 解析MT5实际测试区间((乙暂存 / 日志).read_text(encoding="utf-8"))
+    实际区间 = 解析MT5实际测试区间(日志文本)
     try:
         _确认无既有MT5进程()
         无残留 = True
@@ -125,6 +153,7 @@ def main() -> None:
         结果.通过
         and 生命周期["完整"]
         and 实际区间 == (实参.乙开始日, 实参.乙结束日)
+        and not 严格SOCKS5链路失败
         and 无残留
     )
     工件 = _封存并哈希(根目录)
@@ -134,6 +163,8 @@ def main() -> None:
         "甲受限回收Wine服务进程号": list(结果.被中断Wine服务进程号),
         "乙受限回收Wine服务进程号": list(结果.未中断Wine服务进程号),
         "乙生命周期完整": 生命周期["完整"], "乙实际测试区间": 实际区间,
+        "乙严格SOCKS5链路失败": 严格SOCKS5链路失败,
+        "网络隔离": "sandbox-exec: 仅允许 localhost TCP；外网只能经 SOCKS5 转发",
         "乙报告成交数": len(报告.成交), "乙净利润": str(报告.净利润),
         "运行结束无MT5Wine残留": 无残留, "工件哈希": 工件,
     }

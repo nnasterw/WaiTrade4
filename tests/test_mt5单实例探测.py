@@ -67,6 +67,15 @@ def test_探测会保留共享状态前后证据即使报告缺失(tmp_path) -> 
     assert 结果.结果["MT5持久SOCKS5配置失败"] == []
 
 
+def test_禁止直连沙箱仅允许本地_tcp_和_wine_unix_socket() -> None:
+    配置 = 单实例MT5探测执行器._禁止直连沙箱配置()
+
+    assert "(deny network-outbound)" in 配置
+    assert "(remote unix-socket)" in 配置
+    assert '(remote tcp "localhost:*")' in 配置
+    assert "network-inbound" not in 配置
+
+
 def test_报告缺失时仍返回代理和交易服务器同步诊断(tmp_path) -> None:
     配置, wine, 前缀, 暂存 = _配置与目录(tmp_path)
     日志 = 配置.终端目录 / "logs" / "本轮.log"

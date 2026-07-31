@@ -6,6 +6,7 @@ import sys
 
 from wt4.mt5中断探测 import 两实例中断探测器
 from wt4.mt5后台 import MT5后台进程
+from wt4.mt5单实例探测 import 单实例MT5探测执行器
 
 
 def _启动(目录: Path, 秒数: float) -> MT5后台进程:
@@ -37,3 +38,10 @@ def test_参数必须为正(tmp_path: Path) -> None:
         assert "必须为正" in str(异常)
     else:
         raise AssertionError("应拒绝无效参数")
+
+
+def test_中断实验可复用单实例的禁止直连沙箱边界() -> None:
+    配置 = 单实例MT5探测执行器._禁止直连沙箱配置()
+
+    assert "(deny network-outbound)" in 配置
+    assert '(remote tcp "localhost:*")' in 配置
