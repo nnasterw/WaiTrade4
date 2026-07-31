@@ -36,13 +36,30 @@ def 解析MT5生命周期(日志证据: str) -> dict[str, object]:
         )
         if 标记 in 小写日志
     )
+    代理连接 = tuple(
+        标记
+        for 标记 in (
+            "connecting through socks5 proxy",
+        )
+        if 标记 in 小写日志
+    )
+    交易服务器未同步 = tuple(
+        标记
+        for 标记 in (
+            "not synchronized with trade server",
+            "terminal is not synchronized with the trade server before start automatical testing",
+        )
+        if 标记 in 小写日志
+    )
     return {
         "已启动": 已启动,
         "已成功": 已成功,
         "已退出": 已退出,
         "失败标记": list(失败标记),
         "历史数据不可用标记": list(历史数据不可用),
-        "完整": 已启动 and 已成功 and 已退出 and not 失败标记,
+        "代理连接标记": list(代理连接),
+        "交易服务器未同步标记": list(交易服务器未同步),
+        "完整": 已启动 and 已成功 and 已退出 and not 失败标记 and not 交易服务器未同步,
     }
 
 
@@ -114,15 +131,6 @@ class 单实例MT5探测执行器:
         生命周期 = 解析MT5生命周期(日志文本)
         实际测试区间 = 解析MT5实际测试区间(日志文本)
         工件 = dict(结果.工件)
-        if not 报告证据:
-            return 执行结果(
-                结果.状态.执行无效,
-                {},
-                {**结果.结果, "原因": "缺少 MT5 工件", "缺失": ["报告.html"]},
-            )
-        for 名称 in ("mt5-探测.ini", "共享状态-运行前.json", "共享状态差异.json", 日志证据, *参数证据, *报告证据):
-            路径 = 暂存目录 / 名称
-            工件[名称] = 隔离MT5执行器._哈希(路径)
         结果数据 = {
             **结果.结果,
             "共享状态差异": 差异,
@@ -131,6 +139,15 @@ class 单实例MT5探测执行器:
             "参数输入证据哈希": self._参数文件哈希(参数证据, 暂存目录),
             "MT5实际参数路径": str(实际参数路径) if 实际参数路径 else None,
         }
+        if not 报告证据:
+            return 执行结果(
+                结果.状态.执行无效,
+                {},
+                {**结果数据, "原因": "缺少 MT5 工件", "缺失": ["报告.html"]},
+            )
+        for 名称 in ("mt5-探测.ini", "共享状态-运行前.json", "共享状态差异.json", 日志证据, *参数证据, *报告证据):
+            路径 = 暂存目录 / 名称
+            工件[名称] = 隔离MT5执行器._哈希(路径)
         if 生命周期["历史数据不可用标记"]:
             return 执行结果(
                 结果.状态.数据无效,

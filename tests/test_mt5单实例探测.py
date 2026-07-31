@@ -43,6 +43,24 @@ def test_探测会保留共享状态前后证据即使报告缺失(tmp_path) -> 
     assert (暂存 / "共享状态差异.json").is_file()
     assert (暂存 / "MT5日志证据.txt").read_text(encoding="utf-8") == ""
     assert json.loads((暂存 / "共享状态差异.json").read_text(encoding="utf-8")) == {"删除": [], "修改": [], "新增": []}
+    assert 结果.结果["MT5生命周期"]["交易服务器未同步标记"] == []
+
+
+def test_报告缺失时仍返回代理和交易服务器同步诊断(tmp_path) -> None:
+    配置, wine, 前缀, 暂存 = _配置与目录(tmp_path)
+    日志 = 配置.终端目录 / "logs" / "本轮.log"
+    日志.write_text(
+        "Proxy\tconnecting through SOCKS5 proxy 127.0.0.1:7897\n"
+        "Tester\tnot synchronized with trade server\n",
+        encoding="utf-16le",
+    )
+
+    结果 = 单实例MT5探测执行器(配置, wine, 前缀, 5).执行(_输入(), 暂存)
+
+    # 该测试直接调用前日志已存在，不能将旧日志误当本轮日志；由下一步的
+    # 专门桩测试验证新增日志的诊断内容。
+    assert 结果.状态 is 实验状态.执行无效
+    assert "MT5生命周期" in 结果.结果
 
 
 def test_生命周期只接受本轮完整成功标记() -> None:
@@ -73,6 +91,24 @@ OK\t0\t17:37:21.344\tTerminal\texit with code 0
         "preliminary downloading of history ticks canceled",
         "no history data, stop testing",
     ]
+
+
+def test_生命周期标记代理连接后仍未完成交易服务器同步() -> None:
+    日志 = """
+Proxy\tconnecting through SOCKS5 proxy 127.0.0.1:7897
+Tester\tnot synchronized with trade server
+Tester\tterminal is not synchronized with the trade server before start automatical testing [1]
+Tester\tautomatical testing started
+"""
+
+    生命周期 = 解析MT5生命周期(日志)
+
+    assert 生命周期["代理连接标记"] == ["connecting through socks5 proxy"]
+    assert 生命周期["交易服务器未同步标记"] == [
+        "not synchronized with trade server",
+        "terminal is not synchronized with the trade server before start automatical testing",
+    ]
+    assert 生命周期["完整"] is False
 
 
 def test_从_agent_日志提取实际测试区间而不是信任_ini() -> None:
