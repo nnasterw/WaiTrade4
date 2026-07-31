@@ -23,6 +23,9 @@ from wt4.编排 import 中央实验编排器
 )
 默认代理地址 = "127.0.0.1:7897"
 默认代理探测端点 = ("mt5.exness.com", 443)
+默认Mihomo日志 = Path(
+    "/Users/wen/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev/logs/latest.log"
+)
 
 
 def 计算三风险参数内容(来源: Path) -> bytes:
@@ -115,6 +118,7 @@ def main() -> None:
     参数.add_argument("--wine前缀", type=Path, default=默认Wine前缀)
     参数.add_argument("--tester", type=Path, default=默认Tester)
     参数.add_argument("--历史参数", type=Path, default=默认历史参数)
+    参数.add_argument("--mihomo日志", type=Path, default=默认Mihomo日志)
     实参 = 参数.parse_args()
 
     if not 实参.wine.is_file() or not 实参.tester.is_dir() or not 实参.wine前缀.is_dir():
@@ -153,7 +157,10 @@ def main() -> None:
         运行根目录 / "暂存",
         运行根目录 / "工件",
     )
-    结果 = 编排器.运行(输入, 单实例MT5探测执行器(配置, 实参.wine, 实参.wine前缀, 实参.超时秒数))
+    结果 = 编排器.运行(
+        输入,
+        单实例MT5探测执行器(配置, 实参.wine, 实参.wine前缀, 实参.超时秒数, 实参.mihomo日志),
+    )
     print(json.dumps({"输入": asdict(配置), "实验身份": 结果.实验身份, "状态": 结果.状态, "工件目录": str(结果.工件目录) if 结果.工件目录 else None}, ensure_ascii=False, default=str))
 
 

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 from hashlib import sha256
+import ipaddress
 from pathlib import Path
 import re
 import socket
 import struct
 from typing import Mapping
+from datetime import datetime
 
 from wt4.experiment import 实验输入
 from wt4.mt5执行 import MT5回测配置, 隔离MT5执行器
@@ -27,6 +29,76 @@ def 解析MT5连接端点(日志证据: str) -> tuple[str, ...]:
             if 0 < 端口 < 65536:
                 端点.add(f"{主机.lower()}:{端口}")
     return tuple(sorted(端点))
+
+
+def 解析MihomoTCP时间窗口候选(
+    日志证据: str,
+    开始时刻: str,
+    结束时刻: str,
+) -> dict[str, object]:
+    """提取指定实验窗口内 Mihomo 记录的本机 TCP 外部目标候选。
+
+    Mihomo 日志没有进程标识，时间重叠只能构成"时间窗口关联候选"，
+    不能宣称目标已经由 MT5 确认。函数仅接受环回来源，排除本机目标，
+    防止把 Tester Agent 或其他机器流量误计为交易服务器。
+    """
+    开始 = _解析Mihomo时刻(开始时刻)
+    结束 = _解析Mihomo时刻(结束时刻)
+    if 结束 < 开始:
+        raise ValueError("Mihomo 时间窗口结束时刻不能早于开始时刻")
+
+    匹配模式 = re.compile(
+        r"(?m)^\[(?P<时刻>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\].*?\[TCP\]\s+"
+        r"(?P<来源>[^\s]+)\s+-->\s+(?P<目标>[^\s]+)\s*$"
+    )
+    聚合: dict[str, dict[str, object]] = {}
+    for 匹配 in 匹配模式.finditer(日志证据):
+        时刻文本 = 匹配.group("时刻")
+        时刻 = _解析Mihomo时刻(时刻文本)
+        if not 开始 <= 时刻 <= 结束 or not _是环回端点(匹配.group("来源")):
+            continue
+        目标 = 匹配.group("目标")
+        if not _是外部端点(目标):
+            continue
+        项 = 聚合.setdefault(目标.lower(), {"端点": 目标.lower(), "首次观测时刻": 时刻文本, "次数": 0})
+        项["次数"] = int(项["次数"]) + 1
+    目标 = [聚合[端点] for 端点 in sorted(聚合)]
+    return {
+        "关联方式": "时间窗口关联候选",
+        "开始时刻": 开始时刻,
+        "结束时刻": 结束时刻,
+        "目标总数": len(目标),
+        "目标": 目标,
+    }
+
+
+def _解析Mihomo时刻(时刻: str) -> datetime:
+    try:
+        return datetime.strptime(时刻, "%Y-%m-%d %H:%M:%S" if "." not in 时刻 else "%Y-%m-%d %H:%M:%S.%f")
+    except ValueError as 异常:
+        raise ValueError(f"Mihomo 时刻格式无效: {时刻}") from 异常
+
+
+def _是环回端点(端点: str) -> bool:
+    try:
+        主机, _ = 端点.rsplit(":", 1)
+        return ipaddress.ip_address(主机).is_loopback
+    except ValueError:
+        return False
+
+
+def _是外部端点(端点: str) -> bool:
+    try:
+        主机, 端口文本 = 端点.rsplit(":", 1)
+        端口 = int(端口文本)
+    except ValueError:
+        return False
+    if not 主机 or not 0 < 端口 < 65536 or 主机.lower() == "localhost":
+        return False
+    try:
+        return not ipaddress.ip_address(主机).is_loopback
+    except ValueError:
+        return True
 
 
 def 通过SOCKS5探测端点(代理地址: str, 主机: str, 端口: int, 超时秒数: float = 5) -> dict[str, object]:
@@ -223,6 +295,7 @@ class 单实例MT5探测执行器:
         Wine命令: Path,
         Wine前缀: Path,
         超时秒数: int,
+        Mihomo日志路径: Path | None = None,
     ) -> None:
         if not Wine命令.is_file():
             raise ValueError(f"Wine 命令不存在: {Wine命令}")
@@ -234,8 +307,10 @@ class 单实例MT5探测执行器:
         self.Wine命令 = Wine命令
         self.Wine前缀 = Wine前缀
         self.超时秒数 = 超时秒数
+        self.Mihomo日志路径 = Mihomo日志路径
 
     def 执行(self, 输入: 实验输入, 暂存目录: Path) -> 执行结果:
+        代理观测开始 = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         运行配置 = 生成MT5探测配置(self.探测配置, 暂存目录)
         报告名称 = self._配置报告名称(运行配置)
         受监控目录 = self._受监控目录()
@@ -270,6 +345,7 @@ class 单实例MT5探测执行器:
         )
         日志证据 = self._保留本次日志证据(暂存目录, 运行前日志)
         日志文本 = (暂存目录 / 日志证据).read_text(encoding="utf-8")
+        代理观测结束 = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         生命周期 = 解析MT5生命周期(日志文本)
         代理同步诊断 = 解析MT5代理同步诊断(日志文本)
         实际测试区间 = 解析MT5实际测试区间(日志文本)
@@ -279,6 +355,7 @@ class 单实例MT5探测执行器:
             "共享状态差异": 差异,
             "MT5生命周期": 生命周期,
             "MT5代理同步诊断": 代理同步诊断,
+            "Mihomo时间窗口候选": self._收集Mihomo时间窗口候选(代理观测开始, 代理观测结束),
             "MT5实际测试区间": 实际测试区间,
             "参数输入证据哈希": self._参数文件哈希(参数证据, 暂存目录),
             "MT5实际参数路径": str(实际参数路径) if 实际参数路径 else None,
@@ -316,6 +393,20 @@ class 单实例MT5探测执行器:
                 {**结果数据, "原因": "MT5 生命周期证据不完整"},
             )
         return 执行结果(结果.状态, 工件, 结果数据)
+
+    def _收集Mihomo时间窗口候选(self, 开始时刻: str, 结束时刻: str) -> dict[str, object] | None:
+        if self.Mihomo日志路径 is None:
+            return None
+        if not self.Mihomo日志路径.is_file():
+            return {
+                "关联方式": "时间窗口关联候选",
+                "日志不可用": str(self.Mihomo日志路径),
+                "目标总数": 0,
+                "目标": [],
+            }
+        return 解析MihomoTCP时间窗口候选(
+            self.Mihomo日志路径.read_text(encoding="utf-8", errors="replace"), 开始时刻, 结束时刻
+        )
 
     @staticmethod
     def _配置报告名称(运行配置: Path) -> str:
