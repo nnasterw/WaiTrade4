@@ -57,8 +57,9 @@ class 单实例MT5探测执行器:
         (暂存目录 / "共享状态差异.json").write_text(
             json.dumps(差异, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8"
         )
+        主日志证据 = self._保留本次主日志证据(暂存目录, 差异)
         工件 = dict(结果.工件)
-        for 名称 in ("mt5-探测.ini", "共享状态-运行前.json", "共享状态差异.json"):
+        for 名称 in ("mt5-探测.ini", "共享状态-运行前.json", "共享状态差异.json", 主日志证据):
             路径 = 暂存目录 / 名称
             工件[名称] = 隔离MT5执行器._哈希(路径)
         return 执行结果(结果.状态, 工件, {**结果.结果, "共享状态差异": 差异})
@@ -76,3 +77,20 @@ class 单实例MT5探测执行器:
     @staticmethod
     def _mac路径转WineZ盘(路径: Path) -> str:
         return "Z:\\" + str(路径.resolve()).lstrip("/").replace("/", "\\")
+
+    def _保留本次主日志证据(self, 暂存目录: Path, 差异: dict[str, list[str]]) -> str:
+        """将发生变化的主日志复制到实验暂存，避免共享日志轮转后丢失证据。"""
+        主日志变化 = [
+            相对路径
+            for 相对路径 in [*差异["新增"], *差异["修改"]]
+            if 相对路径.startswith("logs/")
+        ]
+        证据路径 = 暂存目录 / "MT5主日志证据.txt"
+        内容: list[str] = []
+        for 相对路径 in 主日志变化:
+            源文件 = self.探测配置.终端目录 / 相对路径
+            if 源文件.is_file() and not 源文件.is_symlink():
+                内容.append(f"--- {相对路径} ---\n")
+                内容.append(源文件.read_text(encoding="utf-16le", errors="replace"))
+        证据路径.write_text("".join(内容), encoding="utf-8")
+        return 证据路径.name

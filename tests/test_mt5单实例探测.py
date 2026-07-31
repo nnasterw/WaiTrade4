@@ -36,4 +36,5 @@ def test_探测会保留共享状态前后证据即使报告缺失(tmp_path) -> 
     assert (暂存 / "mt5-探测.ini").is_file()
     assert (暂存 / "共享状态-运行前.json").is_file()
     assert (暂存 / "共享状态差异.json").is_file()
+    assert (暂存 / "MT5主日志证据.txt").read_text(encoding="utf-8") == ""
     assert json.loads((暂存 / "共享状态差异.json").read_text(encoding="utf-8")) == {"删除": [], "修改": [], "新增": []}
