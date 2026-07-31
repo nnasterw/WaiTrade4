@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from hashlib import sha256
+import json
 import os
 from pathlib import Path
 import shutil
@@ -38,6 +39,14 @@ def 归档工件(暂存目录: Path, 工件根目录: Path, 实验身份: str, �
         未声明 = sorted(str(路径) for 路径 in 实际路径 - 预期路径)
         缺失 = sorted(str(路径) for 路径 in 预期路径 - 实际路径)
         raise ValueError(f"暂存工件与清单不一致: 未声明={未声明}, 缺失={缺失}")
+
+    清单 = 暂存目录 / "工件清单.json"
+    if 清单.exists():
+        raise ValueError("执行器不得预写工件清单.json")
+    清单.write_text(
+        json.dumps({"版本": 1, "工件哈希": dict(sorted(预期哈希.items()))}, ensure_ascii=False, sort_keys=True, indent=2),
+        encoding="utf-8",
+    )
 
     工件根目录.mkdir(parents=True, exist_ok=True)
     目标目录 = 工件根目录 / 实验身份

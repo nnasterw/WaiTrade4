@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
+from datetime import date
+from decimal import Decimal
 from enum import StrEnum
 from hashlib import sha256
 import json
@@ -9,9 +11,12 @@ from collections import deque
 from threading import Condition, Thread
 from typing import Protocol
 
-from wt4.experiment import 实验输入
+from wt4.experiment import 实验输入, 核验正式策略验收批次
 from wt4.工件 import 归档工件
 from wt4.账本 import 追加式账本
+from wt4.评分 import 评分原料
+from wt4.验收 import 验收输入, 评估硬门槛
+from wt4.窗口 import 生成验收窗口
 
 
 class 实验状态(StrEnum):
@@ -30,6 +35,9 @@ class 执行结果:
     状态: 实验状态
     工件: dict[str, str]
     结果: dict[str, object]
+    验收输入: 验收输入 | None = None
+    评分原料: 评分原料 | None = None
+    风险证据工件: tuple[str, str, str] | None = None
 
 
 class MT5执行器(Protocol):
@@ -41,6 +49,17 @@ class 编排结果:
     实验身份: str
     状态: 实验状态
     工件目录: Path | None
+
+
+@dataclass(frozen=True)
+class 正式策略验收批次结果:
+    窗口截至日: date
+    周期结果: tuple[编排结果, ...]
+    失败原因: tuple[str, ...]
+
+    @property
+    def 通过(self) -> bool:
+        return len(self.周期结果) == 4 and not self.失败原因 and all(结果.状态 is 实验状态.已归档 for 结果 in self.周期结果)
 
 
 class 中央实验编排器:
@@ -94,6 +113,7 @@ class 中央实验编排器:
         self.账本.追加(身份, 实验状态.已创建, {"输入": json.loads(输入.规范内容())})
         try:
             执行结果 = 执行器.执行(输入, 暂存目录)
+            执行结果 = self._核验正式验收结果(输入, 执行结果, 暂存目录)
             if 执行结果.状态 not in {
                 实验状态.已归档,
                 实验状态.有效失败,
@@ -109,7 +129,9 @@ class 中央实验编排器:
 
             预期哈希 = self._写入验收结果(暂存目录, 执行结果)
             工件目录 = 归档工件(暂存目录, self.工件根目录, 身份, 预期哈希)
-            self.账本.追加(身份, 实验状态.已归档, {"工件目录": str(工件目录), **执行结果.结果})
+            工件哈希 = dict(预期哈希)
+            工件哈希["工件清单.json"] = sha256((工件目录 / "工件清单.json").read_bytes()).hexdigest()
+            self.账本.追加(身份, 实验状态.已归档, {"工件目录": str(工件目录), "工件哈希": 工件哈希, **执行结果.结果})
             return 编排结果(身份, 实验状态.已归档, 工件目录)
         except Exception as 异常:
             # 账本的终态本身也可能失败（例如磁盘已满），此时不掩盖原始
@@ -129,6 +151,100 @@ class 中央实验编排器:
         预期哈希 = dict(执行结果.工件)
         预期哈希[结果文件.name] = sha256(结果文件.read_bytes()).hexdigest()
         return 预期哈希
+
+    @staticmethod
+    def _核验正式验收结果(输入: 实验输入, 结果: 执行结果, 暂存目录: Path) -> 执行结果:
+        if not 输入.正式策略验收:
+            return 结果
+        if 结果.状态 is not 实验状态.已归档:
+            return 结果
+        if 结果.验收输入 is None or 结果.评分原料 is None:
+            return 执行结果(
+                实验状态.治理无效, {}, {**结果.结果, "原因": "正式策略验收缺少独立硬门或评分原料"},
+            )
+        if not 结果.验收输入.权益风险证据完整 or not _核验封存风险证据工件(结果, 暂存目录):
+            return 执行结果(
+                实验状态.治理无效, {}, {**结果.结果, "原因": "正式策略验收缺少封存逐tick权益与风险快照工件"},
+            )
+        硬门 = 评估硬门槛(结果.验收输入)
+        if not 硬门.通过:
+            return 执行结果(
+                实验状态.有效失败, {}, {**结果.结果, "原因": "正式策略验收硬门未通过", "验收硬门失败原因": 硬门.失败原因},
+            )
+        if not 结果.评分原料.证据完整 or 结果.评分原料.订单异常数:
+            return 执行结果(
+                实验状态.治理无效, {}, {**结果.结果, "原因": "正式策略验收评分原料证据不完整"},
+            )
+        验收结果 = {
+            **结果.结果,
+            "验收硬门通过": True,
+            "评分基线": {
+                "版本": 1,
+                "验收硬门通过": True,
+                "原料": _序列化评分原料(结果.评分原料),
+            },
+        }
+        return replace(结果, 结果=验收结果)
+
+
+def _序列化评分原料(原料: 评分原料) -> dict[str, object]:
+    return {名称: str(值) if isinstance(值, Decimal) else 值 for 名称, 值 in asdict(原料).items()}
+
+
+def _核验封存风险证据工件(结果: 执行结果, 暂存目录: Path) -> bool:
+    """正式验收不能将调用者布尔字段当作逐 tick 风险证据。
+
+    执行器必须明确声明逐 tick 权益、独立成交风险、风险限额三份结构化工件，并把
+    它们放入本次不可变工件哈希清单；后续真实 MT5 执行器再负责从报告链
+    解析、重演并构造 ``验收输入``。
+    """
+    名称 = 结果.风险证据工件
+    if 名称 is None or len(名称) != 3 or len(set(名称)) != 3:
+        return False
+    for 相对路径 in 名称:
+        路径 = Path(相对路径)
+        文件 = 暂存目录 / 路径
+        if (
+            路径.is_absolute()
+            or ".." in 路径.parts
+            or not 文件.is_file()
+            or 文件.is_symlink()
+            or 结果.工件.get(相对路径) != sha256(文件.read_bytes()).hexdigest()
+        ):
+            return False
+        try:
+            内容 = json.loads(文件.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return False
+        if not isinstance(内容, dict) or not 内容:
+            return False
+    return True
+
+
+def 运行正式策略验收批次(
+    截至日: date,
+    批次: tuple[实验输入, ...],
+    编排器: 中央实验编排器,
+    执行器: tuple[MT5执行器, ...],
+) -> 正式策略验收批次结果:
+    """按冻结的四个半年周期串行运行正式 BTC 策略验收。
+
+    任一期无效或硬门失败即停止，既不伪造完整批次，也不允许后续周期
+    以独立成功冒充批次通过。评分标尺仍需另行汇集至少五份真实归档基线。
+    """
+    窗口 = 生成验收窗口(截至日)
+    核验正式策略验收批次(批次, 窗口)
+    if len(执行器) != 4:
+        raise ValueError("正式策略验收必须提供四个周期执行器")
+    周期结果: list[编排结果] = []
+    失败原因: list[str] = []
+    for 输入, 单期执行器 in zip(批次, 执行器, strict=True):
+        结果 = 编排器.运行(输入, 单期执行器)
+        周期结果.append(结果)
+        if 结果.状态 is not 实验状态.已归档:
+            失败原因.append(f"{输入.起始日}至{输入.结束日}: {结果.状态}")
+            break
+    return 正式策略验收批次结果(截至日, tuple(周期结果), tuple(失败原因))
 
 
 class 后台任务状态(StrEnum):
