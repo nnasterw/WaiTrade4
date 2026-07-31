@@ -65,6 +65,41 @@ def 通过SOCKS5探测端点(代理地址: str, 主机: str, 端口: int, 超时
         return {"通过": False, "阶段": "网络异常", "原因": str(异常)}
 
 
+def 批量通过SOCKS5探测端点(
+    代理地址: str,
+    端点列表: tuple[str, ...],
+    超时秒数: float = 5,
+    最大端点数: int = 16,
+) -> dict[str, object]:
+    """逐个经 SOCKS5 探测日志已明确记录的非环回端点。
+
+    每个探测复用单端点 SOCKS5 实现，绝不直连降级。Tester Agent 的
+    环回端点不能代表 MT5 交易服务器，必须拒绝，避免虚假网络结论。
+    """
+    if 最大端点数 < 1:
+        raise ValueError("SOCKS5 批量探测最大端点数必须为正")
+    去重端点 = tuple(sorted(set(端点列表)))
+    if len(去重端点) > 最大端点数:
+        raise ValueError(f"SOCKS5 批量探测端点过多: {len(去重端点)} > {最大端点数}")
+
+    结果: list[dict[str, object]] = []
+    for 端点 in 去重端点:
+        try:
+            主机, 端口文本 = 端点.rsplit(":", 1)
+            端口 = int(端口文本)
+        except (ValueError, AttributeError) as 异常:
+            raise ValueError(f"SOCKS5 探测端点格式无效: {端点}") from 异常
+        if not 主机 or 主机.startswith("127.") or 主机 == "localhost":
+            raise ValueError(f"SOCKS5 探测拒绝环回端点: {端点}")
+        探测 = 通过SOCKS5探测端点(代理地址, 主机, 端口, 超时秒数)
+        结果.append({"端点": 端点, **探测})
+    return {
+        "端点总数": len(结果),
+        "全部通过": bool(结果) and all(项["通过"] is True for 项 in 结果),
+        "结果": 结果,
+    }
+
+
 def _接收完整(连接: socket.socket, 长度: int) -> bytes:
     内容 = bytearray()
     while len(内容) < 长度:

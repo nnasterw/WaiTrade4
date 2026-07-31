@@ -10,6 +10,7 @@ from wt4.mt5单实例探测 import (
     解析MT5代理同步诊断,
     解析MT5生命周期,
     解析MT5连接端点,
+    批量通过SOCKS5探测端点,
     通过SOCKS5探测端点,
 )
 from wt4.mt5探测 import MT5短窗口探测配置
@@ -188,6 +189,46 @@ def test_socks5探测连接失败仍不会直连(monkeypatch) -> None:
 
     assert 结果["通过"] is False
     assert 结果["阶段"] == "网络异常"
+
+
+def test_批量_socks5_探测去重并逐端点保留结果(monkeypatch) -> None:
+    调用: list[tuple[str, str, int, float]] = []
+
+    def 探测(代理地址: str, 主机: str, 端口: int, 超时秒数: float):
+        调用.append((代理地址, 主机, 端口, 超时秒数))
+        return {"通过": 主机 == "mt5.exness.com", "阶段": "CONNECT"}
+
+    monkeypatch.setattr("wt4.mt5单实例探测.通过SOCKS5探测端点", 探测)
+
+    结果 = 批量通过SOCKS5探测端点(
+        "127.0.0.1:7897",
+        ("trade.example.com:444", "mt5.exness.com:443", "mt5.exness.com:443"),
+        3,
+    )
+
+    assert 调用 == [
+        ("127.0.0.1:7897", "mt5.exness.com", 443, 3),
+        ("127.0.0.1:7897", "trade.example.com", 444, 3),
+    ]
+    assert 结果 == {
+        "端点总数": 2,
+        "全部通过": False,
+        "结果": [
+            {"端点": "mt5.exness.com:443", "通过": True, "阶段": "CONNECT"},
+            {"端点": "trade.example.com:444", "通过": False, "阶段": "CONNECT"},
+        ],
+    }
+
+
+def test_批量_socks5_探测拒绝环回端点(monkeypatch) -> None:
+    monkeypatch.setattr("wt4.mt5单实例探测.通过SOCKS5探测端点", lambda *_: (_ for _ in ()).throw(AssertionError()))
+
+    try:
+        批量通过SOCKS5探测端点("127.0.0.1:7897", ("127.0.0.1:3005",))
+    except ValueError as 异常:
+        assert "环回" in str(异常)
+    else:
+        raise AssertionError("应拒绝 Tester Agent 环回端点")
 
 
 def test_仅封存本轮新增日志并能识别完整生命周期(tmp_path) -> None:
