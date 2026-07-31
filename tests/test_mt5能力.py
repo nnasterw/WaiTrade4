@@ -19,6 +19,17 @@ def test_两个实例必须没有共享可变目录(tmp_path) -> None:
     校验实例隔离([左, 右])
 
 
+def test_同一实例中终端位于_wine_前缀内仍可作为隔离实例(tmp_path) -> None:
+    根目录 = tmp_path / "甲"
+    甲 = 测试实例配置(
+        "甲", 根目录 / "prefix/drive_c/terminal", 根目录 / "prefix/drive_c/data",
+        根目录 / "prefix", 根目录 / "output", 根目录 / "temp",
+        根目录 / "prefix/drive_c/config", 根目录 / "prefix/drive_c/cache",
+    )
+    乙 = _实例("乙", tmp_path / "乙")
+    校验实例隔离([甲, 乙])
+
+
 def test_共享缓存父目录时拒绝并发测试(tmp_path) -> None:
     左 = _实例("甲", tmp_path / "a")
     右 = _实例("乙", tmp_path / "b")

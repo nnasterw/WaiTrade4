@@ -41,7 +41,9 @@ def 生成MT5探测配置(配置: MT5短窗口探测配置, 暂存目录: Path) 
     if 配置.参数文件路径 is not None and not 配置.参数文件路径.is_file():
         raise ValueError(f"MT5 探测参数文件不存在: {配置.参数文件路径}")
 
-    报告名称 = "wt4-" + re.sub(r"[^A-Za-z0-9_-]", "-", 暂存目录.name)
+    # 不能只用暂存目录末级名称：并发实验中的「甲」会在串行和并行轮次
+    # 重名，导致同一 Tester 根目录复用报告输出。
+    报告名称 = "wt4-" + sha256(str(暂存目录.resolve()).encode("utf-8")).hexdigest()[:16]
     内容 = f"""; wt4 单实例能力探测。不可作为策略验收结论。
 [Common]
 Login={配置.登录账号}
