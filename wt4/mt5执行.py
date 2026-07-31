@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+from typing import Mapping
 
 from wt4.experiment import 实验输入
 from wt4.编排 import 实验状态, 执行结果
@@ -22,6 +23,7 @@ class MT5回测配置:
     命令: tuple[str, ...]
     超时秒数: int
     预期工件: tuple[str, ...]
+    环境变量: Mapping[str, str] | None = None
 
 
 class 隔离MT5执行器:
@@ -39,6 +41,7 @@ class 隔离MT5执行器:
         进程 = subprocess.Popen(
             self.配置.命令,
             cwd=暂存目录,
+            env=self._环境(),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -80,6 +83,12 @@ class 隔离MT5执行器:
         if 路径.is_absolute() or ".." in 路径.parts:
             raise ValueError(f"MT5 工件路径越界: {相对路径}")
         return 暂存目录 / 路径
+
+    def _环境(self) -> dict[str, str]:
+        环境 = os.environ.copy()
+        if self.配置.环境变量:
+            环境.update(self.配置.环境变量)
+        return 环境
 
     @staticmethod
     def _哈希(路径: Path) -> str:

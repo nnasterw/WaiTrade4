@@ -48,3 +48,19 @@ def test_超时被记录为执行无效且保存日志(tmp_path) -> None:
 
     assert 结果.状态 is 实验状态.执行无效
     assert "执行超时" in (tmp_path / "执行日志.txt").read_text(encoding="utf-8")
+
+
+def test_执行器可为专属实例传递环境变量(tmp_path) -> None:
+    执行器 = 隔离MT5执行器(
+        MT5回测配置(
+            (sys.executable, "-c", "from pathlib import Path; import os; Path('报告.html').write_text(os.environ['WT4_TEST'])"),
+            5,
+            ("报告.html",),
+            {"WT4_TEST": "隔离值"},
+        )
+    )
+
+    结果 = 执行器.执行(_输入(), tmp_path)
+
+    assert 结果.状态 is 实验状态.已归档
+    assert (tmp_path / "报告.html").read_text(encoding="utf-8") == "隔离值"
