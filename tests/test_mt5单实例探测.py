@@ -119,6 +119,14 @@ MO\t0\t20:23:46.000\tNetwork\tterminal synchronized with Exness Technologies Ltd
     assert any("授权" in 原因 for 原因 in 缺少授权)
 
 
+def test_日志解码同时保留_utf8_tester_和_utf16le_terminal_证据() -> None:
+    utf8 = b"Proxy\tconnecting through SOCKS5 proxy 127.0.0.1:7897\n"
+    utf16 = "Network\tterminal synchronized with Exness Technologies Ltd\n".encode("utf-16le")
+
+    assert "SOCKS5 proxy" in 单实例MT5探测执行器._解码MT5日志(utf8)
+    assert "terminal synchronized" in 单实例MT5探测执行器._解码MT5日志(utf16)
+
+
 def test_生命周期接受_mt5_制表符分隔日志并标记历史数据失败() -> None:
     日志 = """
 NJ\t0\t17:35:25.249\tTester\tautomatical testing started

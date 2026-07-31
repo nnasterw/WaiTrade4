@@ -23,7 +23,9 @@ class MT5短窗口探测配置:
     登录账号: str
     服务器: str
     代理地址: str = "127.0.0.1:7897"
-    代理类型: int = 1
+    # MT5 INI 的 ProxyType 枚举中，0 才表示 SOCKS5。该值已由本机
+    # 成功闭环工件与 WaiTrade2 运行配置共同验证，不能按常见协议编号猜成 1。
+    代理类型: int = 0
     参数文件路径: Path | None = None
 
 
@@ -35,7 +37,7 @@ def 生成MT5探测配置(配置: MT5短窗口探测配置, 暂存目录: Path) 
         raise ValueError(f"MT5 终端不存在: {配置.终端目录}")
     if not 配置.代理地址:
         raise ValueError("MT5 探测必须显式指定代理")
-    if 配置.代理类型 != 1:
+    if 配置.代理类型 != 0:
         raise ValueError("MT5 探测仅允许 SOCKS5 代理，禁止 NONE/HTTP 直连回退")
     if not 配置.登录账号 or not 配置.服务器:
         raise ValueError("MT5 探测必须显式指定登录账号和服务器")

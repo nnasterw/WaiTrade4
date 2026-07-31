@@ -589,7 +589,12 @@ class 单实例MT5探测执行器:
 
     @staticmethod
     def _解码MT5日志(内容: bytes) -> str:
-        try:
-            return 内容.decode("utf-16le")
-        except UnicodeDecodeError:
-            return 内容.decode("utf-8", errors="replace")
+        # 主 Terminal 日志是 UTF-16LE，但 Tester/Agent 日志可能是 UTF-8。
+        # 不能只依赖 UTF-16LE 的异常：任意偶数字节的 UTF-8 文本也能被
+        # ``decode`` 成乱码，从而丢掉 SOCKS5、授权和同步证据。
+        if 内容.startswith((b"\xff\xfe", b"\xfe\xff")) or (len(内容) >= 4 and 内容[1::2].count(0) * 2 >= len(内容[1::2])):
+            try:
+                return 内容.decode("utf-16")
+            except UnicodeDecodeError:
+                pass
+        return 内容.decode("utf-8", errors="replace")
