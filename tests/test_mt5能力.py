@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from pathlib import Path
+import json
 
 from wt4.mt5能力 import 测试实例配置, 校验实例隔离
 
@@ -90,3 +91,40 @@ def test_盘点以完整wine前缀而非终端子目录评估空间(monkeypatch,
 
     assert 盘点.Wine前缀字节 == len(b"terminal") + len(b"system-state")
     assert not 盘点.双实例隔离可准备.可准备
+
+
+def test_并发探测未通过仍写入结论与账本终态(tmp_path) -> None:
+    from wt4.运行两实例并发能力探测 import _写入结论并完成记账
+    from wt4.账本 import 追加式账本
+
+    标识 = "失败并发探测"
+    账本 = 追加式账本(tmp_path / "账本.sqlite")
+    账本.追加(标识, "已创建", {})
+    证据 = {
+        "实验标识": 标识,
+        "实例路径": tmp_path / "隔离实例",
+        "并发失败率为零且有效提速": False,
+    }
+
+    _写入结论并完成记账(tmp_path, 账本, 标识, 证据)
+
+    assert json.loads((tmp_path / "并发结论.json").read_text(encoding="utf-8")) == {
+        **证据, "实例路径": str(tmp_path / "隔离实例"),
+    }
+    assert [事件.类型 for 事件 in 账本.事件(标识)] == ["已创建", "已完成"]
+
+
+def test_并发运行诊断从本轮日志提取端点与授权错误(tmp_path) -> None:
+    from wt4.运行两实例并发能力探测 import _提取运行诊断
+
+    日志 = tmp_path / "并行" / "甲" / "MT5日志证据.txt"
+    日志.parent.mkdir(parents=True)
+    日志.write_text(
+        "Core agent process started on 127.0.0.1:3005\nCore tester agent authorization error\n",
+        encoding="utf-8",
+    )
+
+    诊断 = _提取运行诊断(tmp_path)
+
+    assert 诊断["并行"]["甲"] == {"Agent端点": ["127.0.0.1:3005"], "存在Agent授权错误": True}
+    assert not 诊断["串行"]["乙"]["存在Agent授权错误"]

@@ -6,6 +6,7 @@ from decimal import Decimal
 from hashlib import sha256
 import json
 from pathlib import Path
+import re
 import subprocess
 from uuid import uuid4
 
@@ -57,6 +58,46 @@ def _确认无既有MT5进程() -> None:
         raise RuntimeError(f"无法核验既有 MT5/Wine 进程: {查找.stderr.strip()}")
 
 
+def _写入结论并完成记账(
+    运行根目录: Path,
+    账本: 追加式账本,
+    标识: str,
+    证据: dict[str, object],
+    *,
+    终态: str = "已完成",
+) -> None:
+    """同时留下结论文件和追加式终态，失败观测也不可成为半成品。
+
+    结论先以原子替换落盘；随后无论探测是通过、未通过还是异常，都
+    追加一个终态事件。严格核验器仍会拒绝不通过的结论，但不会把真实
+    失败错误地表现为只有“已创建”的不可审计运行。
+    """
+    # ``asdict(测试实例配置)`` 中包含 Path；结论和账本必须落下同一份
+    # 已规范化 JSON 数据，避免结论已经存在而终态账本因序列化失败缺失。
+    可记账证据 = json.loads(json.dumps(证据, ensure_ascii=False, default=str))
+    结论路径 = 运行根目录 / "并发结论.json"
+    临时路径 = 结论路径.with_name(f".{结论路径.name}.{标识}.tmp")
+    临时路径.write_text(json.dumps(可记账证据, ensure_ascii=False, indent=2), encoding="utf-8")
+    临时路径.replace(结论路径)
+    账本.追加(标识, 终态, 可记账证据)
+
+
+def _提取运行诊断(运行根目录: Path) -> dict[str, dict[str, dict[str, object]]]:
+    """提取每次运行实际连接的 Agent 端点及授权错误，供并发失败归因。"""
+    诊断: dict[str, dict[str, dict[str, object]]] = {}
+    for 阶段 in ("串行", "并行"):
+        诊断[阶段] = {}
+        for 名称 in ("甲", "乙"):
+            日志 = 运行根目录 / 阶段 / 名称 / "MT5日志证据.txt"
+            内容 = 日志.read_text(encoding="utf-8", errors="replace") if 日志.is_file() else ""
+            端点 = re.findall(r"agent process started on (127\.0\.0\.1:\d+)", 内容, flags=re.IGNORECASE)
+            诊断[阶段][名称] = {
+                "Agent端点": sorted(set(端点)),
+                "存在Agent授权错误": "tester agent authorization error" in 内容.lower(),
+            }
+    return 诊断
+
+
 def main() -> None:
     参数 = argparse.ArgumentParser(description="实测 wt4 两套隔离 MT5 Tester 的串行与并行能力")
     参数.add_argument("--开始日", default="2025.03.02")
@@ -103,17 +144,27 @@ def main() -> None:
         lambda 路径: 解析MT5报告(路径, 期望),
         实参.最低加速比,
     )
-    结果 = 探测器.执行(运行根目录)
-    证据 = {
-        "实验标识": 标识, "实例": {名称: asdict(配置) for 名称, 配置 in 实例.items()},
-        "串行墙钟秒": 结果.串行墙钟秒, "并行墙钟秒": 结果.并行墙钟秒, "加速比": 结果.加速比,
-        "两实例逐笔一致": 结果.两实例逐笔一致,
-        "并发失败率为零且有效提速": 结果.并发失败率为零且有效提速,
-        "串行状态": {名称: 结果.状态.value for 名称, 结果 in 结果.串行结果.items()},
-        "并行状态": {名称: 结果.状态.value for 名称, 结果 in 结果.并行结果.items()},
-    }
-    (运行根目录 / "并发结论.json").write_text(json.dumps(证据, ensure_ascii=False, default=str, indent=2), encoding="utf-8")
-    账本.追加(标识, "已完成", 证据)
+    try:
+        结果 = 探测器.执行(运行根目录)
+        证据: dict[str, object] = {
+            "实验标识": 标识, "实例": {名称: asdict(配置) for 名称, 配置 in 实例.items()},
+            "串行墙钟秒": 结果.串行墙钟秒, "并行墙钟秒": 结果.并行墙钟秒, "加速比": 结果.加速比,
+            "两实例逐笔一致": 结果.两实例逐笔一致,
+            "并发失败率为零且有效提速": 结果.并发失败率为零且有效提速,
+            "串行状态": {名称: 结果.状态.value for 名称, 结果 in 结果.串行结果.items()},
+            "并行状态": {名称: 结果.状态.value for 名称, 结果 in 结果.并行结果.items()},
+            "运行诊断": _提取运行诊断(运行根目录),
+        }
+    except BaseException as 异常:
+        证据 = {
+            "实验标识": 标识,
+            "实例": {名称: asdict(配置) for 名称, 配置 in 实例.items()},
+            "异常类型": type(异常).__name__,
+            "原因": str(异常),
+        }
+        _写入结论并完成记账(运行根目录, 账本, 标识, 证据, 终态="执行无效")
+        raise
+    _写入结论并完成记账(运行根目录, 账本, 标识, 证据)
     print(json.dumps(证据, ensure_ascii=False, default=str))
 
 
