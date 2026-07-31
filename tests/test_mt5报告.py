@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from wt4.mt5报告 import MT5报告错误, 报告期望, 解析MT5报告
+from wt4.正式验收工件 import 完成正式验收风险桥接
 from wt4.风险 import 重演MT5已实现余额, 重演MT5成交风险
 from wt4.验收 import 从MT5报告构造验收输入
 
@@ -104,3 +105,52 @@ def test_deals余额变化不守恒会拒绝(tmp_path: Path) -> None:
 
     with pytest.raises(MT5报告错误, match="余额变化"):
         解析MT5报告(_写报告(tmp_path, 内容), _期望())
+
+
+def test_正式验收风险桥接从报告与独立工件生成第三份风险工件(tmp_path: Path) -> None:
+    报告 = 解析MT5报告(_写报告(tmp_path, _报告()), _期望())
+    权益 = tmp_path / "逐tick权益.json"
+    成交风险 = tmp_path / "成交风险.json"
+    风险限额 = tmp_path / "风险限额.json"
+    权益.write_text(
+        '{"权益点":[{"时间":"2025.02.01 00:00:00","余额":"300","权益":"300"},'
+        '{"时间":"2025.02.02 13:36:28","余额":"300","权益":"300"},'
+        '{"时间":"2025.02.02 13:56:28","余额":"312.5","权益":"312.5"}]}',
+        encoding="utf-8",
+    )
+    成交风险.write_text(
+        '{"开仓风险":[{"成交号":2,"时间":"2025.02.02 13:36:28",'
+        '"当前权益":"300","单笔初始风险":"8","开放初始风险":"8"}]}',
+        encoding="utf-8",
+    )
+
+    输入 = 完成正式验收风险桥接(
+        报告=报告, 逐tick权益路径=权益, 成交风险路径=成交风险, 风险限额路径=风险限额,
+        压力封存净收益=Decimal("1"), 极端压力风险通过=True, 输入工件完整=True, 治理通过=True,
+    )
+
+    assert 输入.权益风险证据完整
+    assert 输入.风险限额重演 is not None
+    assert 输入.风险限额重演.最大单笔初始风险比例 == Decimal("0.02666666666666666666666666667")
+    assert '"来源": "由报告、逐tick权益与独立开仓风险工件重演"' in 风险限额.read_text(encoding="utf-8")
+
+
+def test_正式验收风险桥接缺少报告开仓证据时保持_fail_closed(tmp_path: Path) -> None:
+    报告 = 解析MT5报告(_写报告(tmp_path, _报告()), _期望())
+    权益 = tmp_path / "逐tick权益.json"
+    成交风险 = tmp_path / "成交风险.json"
+    风险限额 = tmp_path / "风险限额.json"
+    权益.write_text(
+        '{"权益点":[{"时间":"2025.02.01 00:00:00","余额":"300","权益":"300"},'
+        '{"时间":"2025.02.02 13:36:28","余额":"300","权益":"300"}]}', encoding="utf-8"
+    )
+    成交风险.write_text('{"开仓风险":[]}', encoding="utf-8")
+
+    输入 = 完成正式验收风险桥接(
+        报告=报告, 逐tick权益路径=权益, 成交风险路径=成交风险, 风险限额路径=风险限额,
+        压力封存净收益=Decimal("1"), 极端压力风险通过=True, 输入工件完整=True, 治理通过=True,
+    )
+
+    assert not 输入.权益风险证据完整
+    assert 输入.风险限额重演 is None
+    assert "没有开仓风险证据" in 风险限额.read_text(encoding="utf-8")
