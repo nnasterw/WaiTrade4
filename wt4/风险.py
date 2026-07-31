@@ -54,6 +54,7 @@ class 持仓风险快照:
 @dataclass(frozen=True)
 class 成交风险重演结果:
     持仓快照: tuple[持仓风险快照, ...]
+    日初余额: dict[str, Decimal]
     已实现日损失: dict[str, Decimal]
     证据缺失: tuple[str, ...]
 
@@ -148,7 +149,7 @@ def 重演MT5成交风险(报告: MT5报告摘要) -> 成交风险重演结果:
             证据缺失.append(f"{成交.成交号}:{原因}")
         快照.append(持仓风险快照(成交.时间, 净手数, 风险, 原因))
         上一余额 = 成交.余额
-    return 成交风险重演结果(tuple(快照), 已实现日损失, tuple(证据缺失))
+    return 成交风险重演结果(tuple(快照), 日初余额, 已实现日损失, tuple(证据缺失))
 
 
 def 计算当日亏损(日初权益: Decimal, 当前权益: Decimal, 当日出入金净额: Decimal = Decimal("0")) -> Decimal:

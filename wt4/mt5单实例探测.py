@@ -6,6 +6,7 @@ import ipaddress
 from pathlib import Path
 import re
 import socket
+import ssl
 import struct
 from typing import Mapping
 from datetime import datetime
@@ -103,6 +104,49 @@ def _是外部端点(端点: str) -> bool:
 
 def 通过SOCKS5探测端点(代理地址: str, 主机: str, 端口: int, 超时秒数: float = 5) -> dict[str, object]:
     """仅经 SOCKS5 建立到指定端点的 TCP CONNECT；不允许直连降级。"""
+    try:
+        with _建立SOCKS5通道(代理地址, 主机, 端口, 超时秒数):
+            return {"通过": True, "阶段": "CONNECT"}
+    except OSError as 异常:
+        return {"通过": False, "阶段": "网络异常", "原因": str(异常)}
+
+
+def 通过SOCKS5探测TLS端点(
+    代理地址: str,
+    主机: str,
+    端口: int,
+    SNI主机: str | None = None,
+    超时秒数: float = 5,
+) -> dict[str, object]:
+    """仅通过 SOCKS5 隧道完成 TLS 握手，验证 TCP 之后的 SNI/TLS 层。
+
+    这仍不等价于 MT5 的账户授权或终端同步，但能区分"TCP CONNECT 可达"
+    与"目标服务接受代理隧道中的 TLS"。没有任何直连回退路径。
+    """
+    原始连接: socket.socket | None = None
+    try:
+        原始连接 = _建立SOCKS5通道(代理地址, 主机, 端口, 超时秒数)
+        上下文 = ssl.create_default_context()
+        with 上下文.wrap_socket(原始连接, server_hostname=SNI主机 or 主机) as TLS连接:
+            密码套件 = TLS连接.cipher()
+            return {
+                "通过": True,
+                "阶段": "TLS握手",
+                "TLS版本": TLS连接.version(),
+                "密码套件": 密码套件[0] if 密码套件 else None,
+            }
+    except (OSError, ssl.SSLError, ValueError) as 异常:
+        return {"通过": False, "阶段": "TLS握手", "原因": str(异常)}
+    finally:
+        if 原始连接 is not None:
+            try:
+                原始连接.close()
+            except OSError:
+                pass
+
+
+def _建立SOCKS5通道(代理地址: str, 主机: str, 端口: int, 超时秒数: float) -> socket.socket:
+    """建立 SOCKS5 CONNECT 后返回已连接套接字；调用方负责关闭。"""
     if 超时秒数 <= 0 or not 0 < 端口 < 65536:
         raise ValueError("SOCKS5 探测参数无效")
     try:
@@ -113,28 +157,33 @@ def 通过SOCKS5探测端点(代理地址: str, 主机: str, 端口: int, 超时
     if not 代理主机 or not 0 < 代理端口 < 65536:
         raise ValueError(f"SOCKS5 代理地址无效: {代理地址}")
     try:
-        with socket.create_connection((代理主机, 代理端口), timeout=超时秒数) as 连接:
-            连接.settimeout(超时秒数)
-            连接.sendall(b"\x05\x01\x00")
-            协商 = _接收完整(连接, 2)
-            if 协商 != b"\x05\x00":
-                return {"通过": False, "阶段": "认证协商", "响应": 协商.hex()}
-            主机字节 = 主机.encode("idna")
-            if not 1 <= len(主机字节) <= 255:
-                raise ValueError("SOCKS5 目标主机无效")
-            连接.sendall(b"\x05\x01\x00\x03" + bytes([len(主机字节)]) + 主机字节 + struct.pack(">H", 端口))
-            头 = _接收完整(连接, 4)
-            if len(头) != 4 or 头[0] != 5 or 头[1] != 0:
-                return {"通过": False, "阶段": "CONNECT", "响应": 头.hex()}
-            地址长度 = {1: 4, 4: 16}.get(头[3])
-            if 头[3] == 3:
-                地址长度 = _接收完整(连接, 1)[0]
-            if 地址长度 is None:
-                return {"通过": False, "阶段": "CONNECT地址类型", "响应": 头.hex()}
-            _接收完整(连接, 地址长度 + 2)
-            return {"通过": True, "阶段": "CONNECT"}
-    except OSError as 异常:
-        return {"通过": False, "阶段": "网络异常", "原因": str(异常)}
+        连接 = socket.create_connection((代理主机, 代理端口), timeout=超时秒数)
+        连接.settimeout(超时秒数)
+        连接.sendall(b"\x05\x01\x00")
+        协商 = _接收完整(连接, 2)
+        if 协商 != b"\x05\x00":
+            raise OSError(f"SOCKS5 认证协商失败: {协商.hex()}")
+        主机字节 = 主机.encode("idna")
+        if not 1 <= len(主机字节) <= 255:
+            raise ValueError("SOCKS5 目标主机无效")
+        连接.sendall(b"\x05\x01\x00\x03" + bytes([len(主机字节)]) + 主机字节 + struct.pack(">H", 端口))
+        头 = _接收完整(连接, 4)
+        if len(头) != 4 or 头[0] != 5 or 头[1] != 0:
+            raise OSError(f"SOCKS5 CONNECT 失败: {头.hex()}")
+        地址长度 = {1: 4, 4: 16}.get(头[3])
+        if 头[3] == 3:
+            地址长度 = _接收完整(连接, 1)[0]
+        if 地址长度 is None:
+            raise OSError(f"SOCKS5 CONNECT 地址类型无效: {头.hex()}")
+        _接收完整(连接, 地址长度 + 2)
+        return 连接
+    except Exception:
+        if "连接" in locals():
+            try:
+                连接.close()
+            except AttributeError:
+                pass
+        raise
 
 
 def 批量通过SOCKS5探测端点(

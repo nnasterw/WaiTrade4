@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal
 
 from wt4.风险 import 权益点, 风险规则, 核验权益曲线, 计算初始风险
@@ -53,9 +54,22 @@ def test_deals能重演净持仓和已实现日损失但拒绝臆造开放风险
 
     assert [快照.净手数 for 快照 in 结果.持仓快照] == [Decimal("0"), Decimal("0.01"), Decimal("0")]
     assert 结果.已实现日损失 == {"2025-01-01": Decimal("10")}
+    assert 结果.日初余额 == {"2025-01-01": Decimal("300")}
     assert not 结果.开放风险证据完整
     assert 结果.持仓快照[1].开放初始风险 is None
     assert "服务器止损" in 结果.持仓快照[1].原因
+
+
+def test_已实现日损失按每日开盘余额而非全期初始资金核验() -> None:
+    报告 = _报告()
+    成交 = (*报告.成交, 成交明细(
+        "2025.01.02 01:00:00", 4, "BTCUSDm", "buy", "out", Decimal("0.01"), Decimal("1"), 4,
+        Decimal("0"), Decimal("0"), Decimal("-31"), Decimal("274"), "",
+    ))
+    结果 = 重演MT5成交风险(replace(报告, 成交=成交))
+
+    assert 结果.日初余额["2025-01-02"] == Decimal("305")
+    assert 结果.已实现日损失["2025-01-02"] == Decimal("31")
 
 from wt4.风险 import 计算当日亏损, 核验风险限额
 

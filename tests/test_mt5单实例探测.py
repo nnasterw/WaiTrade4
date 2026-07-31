@@ -12,6 +12,7 @@ from wt4.mt5单实例探测 import (
     解析MT5生命周期,
     解析MT5连接端点,
     批量通过SOCKS5探测端点,
+    通过SOCKS5探测TLS端点,
     通过SOCKS5探测端点,
 )
 from wt4.mt5探测 import MT5短窗口探测配置
@@ -223,6 +224,9 @@ def test_mihomo时间窗口要求完整且正向的边界() -> None:
 
 def test_socks5探测连接失败仍不会直连(monkeypatch) -> None:
     class _失败连接:
+        def close(self):
+            return None
+
         def __enter__(self):
             return self
 
@@ -244,6 +248,57 @@ def test_socks5探测连接失败仍不会直连(monkeypatch) -> None:
 
     assert 结果["通过"] is False
     assert 结果["阶段"] == "网络异常"
+
+
+def test_socks5_tls探测通过代理隧道并携带指定_sni(monkeypatch) -> None:
+    调用: dict[str, object] = {}
+
+    class _TLS连接:
+        version = lambda self: "TLSv1.3"
+        cipher = lambda self: ("TLS_AES_256_GCM_SHA384", "TLSv1.3", 256)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+    class _上下文:
+        def wrap_socket(self, 连接, *, server_hostname):
+            调用["连接"] = 连接
+            调用["server_hostname"] = server_hostname
+            return _TLS连接()
+
+    class _隧道:
+        def close(self):
+            return None
+
+    隧道 = _隧道()
+    monkeypatch.setattr("wt4.mt5单实例探测._建立SOCKS5通道", lambda *_: 隧道)
+    monkeypatch.setattr("wt4.mt5单实例探测.ssl.create_default_context", lambda: _上下文())
+
+    结果 = 通过SOCKS5探测TLS端点("127.0.0.1:7897", "203.29.60.245", 443, "mt5.exness.com")
+
+    assert 调用 == {"连接": 隧道, "server_hostname": "mt5.exness.com"}
+    assert 结果 == {"通过": True, "阶段": "TLS握手", "TLS版本": "TLSv1.3", "密码套件": "TLS_AES_256_GCM_SHA384"}
+
+
+def test_socks5_tls探测握手失败不会改走直连(monkeypatch) -> None:
+    class _上下文:
+        def wrap_socket(self, *_args, **_kwargs):
+            raise OSError("TLS handshake rejected")
+
+    class _隧道:
+        def close(self):
+            return None
+
+    monkeypatch.setattr("wt4.mt5单实例探测._建立SOCKS5通道", lambda *_: _隧道())
+    monkeypatch.setattr("wt4.mt5单实例探测.ssl.create_default_context", lambda: _上下文())
+
+    结果 = 通过SOCKS5探测TLS端点("127.0.0.1:7897", "mt5.exness.com", 443)
+
+    assert 结果["通过"] is False
+    assert 结果["阶段"] == "TLS握手"
 
 
 def test_批量_socks5_探测去重并逐端点保留结果(monkeypatch) -> None:
