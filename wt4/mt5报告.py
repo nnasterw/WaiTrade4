@@ -103,7 +103,7 @@ class _表格解析器(HTMLParser):
     def handle_endtag(self, tag: str) -> None:
         if tag in {"td", "th"} and self._当前格 is not None:
             assert self._当前行 is not None
-            self._当前行.append(_规范文本("".join(self._当前格)))
+            self._当前行.append(_规范报告字段(_规范文本("".join(self._当前格))))
             self._当前格 = None
         elif tag == "tr" and self._当前行 is not None:
             assert self._当前表 is not None
@@ -123,6 +123,32 @@ class _表格解析器(HTMLParser):
 
 def _规范文本(value: str) -> str:
     return " ".join(value.replace("\xa0", " ").split())
+
+
+# MT5 Tester 会跟随终端 UI 语言输出报告。内部解析仍只使用一套稳定的
+# 规范字段名；不能把整张报告中所有 ``标签:`` 都视为摘要字段。
+_本地化字段 = {
+    "订单": "Order", "成交": "Deal", "开价时间": "Open Time",
+    "交易品种": "Symbol", "类型": "Type", "交易量": "Volume",
+    "价位": "Price", "止损": "S / L", "止盈": "T / P",
+    "时间": "Time", "状态": "State", "注释": "Comment",
+    "趋势": "Direction", "手续费": "Commission", "库存费": "Swap",
+    "盈利": "Profit", "结余": "Balance",
+}
+
+_本地化摘要标签 = {
+    "专家:": "Expert:", "交易品种:": "Symbol:", "期间:": "Period:",
+    "初始入金:": "Initial Deposit:", "质量历史:": "History Quality:",
+    "总净盈利:": "Total Net Profit:", "盈利因子:": "Profit Factor:",
+    "交易总计:": "Total Trades:", "总成交:": "Total Deals:",
+    "最大结余亏损:": "Balance Drawdown Maximal:",
+    "最大净值亏损:": "Equity Drawdown Maximal:",
+}
+
+
+def _规范报告字段(value: str) -> str:
+    """将 MT5 的已知中文结构字段规范成解析器的内部字段名。"""
+    return _本地化字段.get(value, value)
 
 
 def _读取utf16le(路径: Path) -> str:
@@ -145,13 +171,25 @@ def _唯一字段(字段: dict[str, str], 标签: str, 值: str) -> None:
 
 
 def _收集字段(表格: list[list[list[str]]]) -> dict[str, str]:
+    摘要字段 = {
+        "Expert", "Symbol", "Period", "Initial Deposit", "History Quality",
+        "Total Net Profit", "Profit Factor", "Total Trades", "Total Deals",
+        "Balance Drawdown Maximal", "Equity Drawdown Maximal",
+    }
     字段: dict[str, str] = {}
     for 表 in 表格:
         for 行 in 表:
             for i in range(0, len(行) - 1, 2):
-                标签, 值 = 行[i], 行[i + 1]
-                if 标签.endswith(":") and 值:
-                    _唯一字段(字段, 标签[:-1], 值)
+                原标签, 值 = 行[i], 行[i + 1]
+                标签 = _本地化摘要标签.get(原标签, 原标签)
+                if 标签.endswith(":") and 标签[:-1] in 摘要字段 and 值:
+                    规范标签 = 标签[:-1]
+                    # 本地化报告会在参数/统计区重复展示业务词（例如
+                    # ``交易品种: 1``）；它不是报告身份字段。英文规范字段
+                    # 一旦冲突仍严格拒绝，防止测试输入被静默替换。
+                    if 原标签 != 标签 and 规范标签 in 字段:
+                        continue
+                    _唯一字段(字段, 规范标签, 值)
     return 字段
 
 
@@ -171,6 +209,7 @@ def _百分比(value: str, 标签: str) -> Decimal:
 
 
 def _历史质量与建模方式(value: str) -> tuple[Decimal, str]:
+    value = value.replace("真实报价", " real ticks")
     匹配 = re.fullmatch(r"((?:0|[1-9]\d{0,2})(?:\.\d+)?%) (real ticks)", value)
     if 匹配 is None:
         raise MT5报告错误(f"History Quality格式或建模方式异常: {value}")
@@ -216,7 +255,7 @@ def _解析订单(表格: list[list[list[str]]], 期望品种: str) -> tuple[订
                     raise MT5报告错误("Orders表重复")
                 交易行 = 表[位置 + 1:]
                 for 结束位置, 候选行 in enumerate(交易行):
-                    if 候选行 == ["Deals"]:
+                    if 候选行 in (["Deals"], ["Deal"]):
                         交易行 = 交易行[:结束位置]
                         break
                 匹配表 = 交易行
@@ -278,7 +317,7 @@ def _解析成交(表格: list[list[list[str]]], 期望品种: str, 初始资金
                 continue
             if 匹配表 is not None:
                 raise MT5报告错误("Deals表重复")
-            if 位置 == 0 or 表[位置 - 1] != ["Deals"]:
+            if 位置 == 0 or 表[位置 - 1] not in (["Deals"], ["Deal"]):
                 raise MT5报告错误("Deals表标题异常")
             匹配表 = 表[位置 + 1:]
     if 匹配表 is None:

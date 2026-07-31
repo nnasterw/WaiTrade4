@@ -47,7 +47,8 @@ def _参数文件(来源: Path, 输入目录: Path, 标识: str, 名称: str) ->
 def _确认无既有MT5进程() -> None:
     """并发实验仅管理自身进程组，发现既有 MT5/Wine 就拒绝启动。"""
     查找 = subprocess.run(
-        ["pgrep", "-af", r"terminal64\.exe|wineserver"],
+        # 方括号避免 pgrep 把其自身命令行中的搜索表达式当成命中项。
+        ["pgrep", "-af", r"[t]erminal64\.exe|[w]ineserver"],
         text=True, capture_output=True, check=False,
     )
     if 查找.returncode == 0 and 查找.stdout.strip():

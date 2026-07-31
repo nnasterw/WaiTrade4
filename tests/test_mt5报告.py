@@ -78,6 +78,22 @@ def test_重复冲突字段会拒绝(tmp_path: Path) -> None:
         解析MT5报告(_写报告(tmp_path, 内容), _期望())
 
 
+def test_中文报告只采集受控摘要字段(tmp_path: Path) -> None:
+    内容 = _报告().replace("Expert:", "专家:").replace("Symbol:", "交易品种:").replace("Period:", "期间:")
+    内容 = 内容.replace("Initial Deposit:", "初始入金:").replace("History Quality:", "质量历史:")
+    内容 = 内容.replace("Total Net Profit:", "总净盈利:").replace("Profit Factor:", "盈利因子:")
+    内容 = 内容.replace("Total Trades:", "交易总计:").replace("Total Deals:", "总成交:")
+    内容 = 内容.replace("Balance Drawdown Maximal:", "最大结余亏损:")
+    内容 = 内容.replace("Equity Drawdown Maximal:", "最大净值亏损:").replace("100% real ticks", "100%真实报价")
+    # 参数区存在同名业务标签，但它不属于摘要白名单，不能污染 Symbol。
+    内容 = 内容.replace("</table>\n<table><tr><td>Orders", "<tr><td>交易品种:</td><td>参数区的值</td></tr></table>\n<table><tr><td>Orders")
+
+    结果 = 解析MT5报告(_写报告(tmp_path, 内容), _期望())
+
+    assert 结果.品种 == "BTCUSDm"
+    assert 结果.建模方式 == "real ticks"
+
+
 def test_报告身份不匹配会拒绝(tmp_path: Path) -> None:
     with pytest.raises(MT5报告错误, match="身份"):
         解析MT5报告(_写报告(tmp_path, _报告(初始资金="301.00")), _期望())
