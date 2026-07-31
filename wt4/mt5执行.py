@@ -4,11 +4,10 @@ from dataclasses import dataclass
 from hashlib import sha256
 import os
 from pathlib import Path
-import signal
-import subprocess
 from typing import Mapping
 
 from wt4.experiment import 实验输入
+from wt4.mt5后台 import MT5后台进程
 from wt4.编排 import 实验状态, 执行结果
 
 
@@ -38,34 +37,40 @@ class 隔离MT5执行器:
 
     def 执行(self, 输入: 实验输入, 暂存目录: Path) -> 执行结果:
         日志 = 暂存目录 / "执行日志.txt"
-        进程 = subprocess.Popen(
-            self.配置.命令,
-            cwd=暂存目录,
-            env=self._环境(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            start_new_session=os.name == "posix",
-        )
-        try:
-            标准输出, 标准错误 = 进程.communicate(timeout=self.配置.超时秒数)
-        except subprocess.TimeoutExpired:
-            self._终止受控进程组(进程)
-            标准输出, 标准错误 = 进程.communicate()
+        进程 = MT5后台进程.启动(self.配置.命令, 暂存目录, self._环境(), 暂存目录)
+        启动快照 = 进程.快照()
+        返回码 = 进程.等待(self.配置.超时秒数)
+        if 返回码 is None:
+            进程.终止自有进程组()
+            返回码 = 进程.等待(5)
+            标准输出, 标准错误 = 进程.输出文本()
             日志.write_text(
-                self._执行日志(进程.returncode, 标准输出, 标准错误, 超时=True),
+                self._执行日志(返回码, 标准输出, 标准错误, 超时=True),
                 encoding="utf-8",
             )
-            return 执行结果(实验状态.执行无效, {}, {"原因": "MT5 执行超时"})
+            return 执行结果(
+                实验状态.执行无效,
+                {},
+                {"原因": "MT5 执行超时", "后台进程": self._后台证据(启动快照, 进程.快照())},
+            )
+        标准输出, 标准错误 = 进程.输出文本()
 
         日志.write_text(
-            self._执行日志(进程.returncode, 标准输出, 标准错误),
+            self._执行日志(返回码, 标准输出, 标准错误),
             encoding="utf-8",
         )
-        if 进程.returncode != 0:
-            return 执行结果(实验状态.执行无效, {}, {"原因": f"MT5 返回码 {进程.returncode}"})
+        if 返回码 != 0:
+            return 执行结果(
+                实验状态.执行无效,
+                {},
+                {"原因": f"MT5 返回码 {返回码}", "后台进程": self._后台证据(启动快照, 进程.快照())},
+            )
 
-        工件 = {日志.name: self._哈希(日志)}
+        工件 = {
+            日志.name: self._哈希(日志),
+            进程.标准输出.name: self._哈希(进程.标准输出),
+            进程.标准错误.name: self._哈希(进程.标准错误),
+        }
         缺失: list[str] = []
         for 相对路径 in self.配置.预期工件:
             文件 = self._受限工件路径(暂存目录, 相对路径)
@@ -74,8 +79,26 @@ class 隔离MT5执行器:
             else:
                 工件[相对路径] = self._哈希(文件)
         if 缺失:
-            return 执行结果(实验状态.执行无效, {}, {"原因": "缺少 MT5 工件", "缺失": 缺失})
-        return 执行结果(实验状态.已归档, 工件, {"MT5返回码": 进程.returncode})
+            return 执行结果(
+                实验状态.执行无效,
+                {},
+                {"原因": "缺少 MT5 工件", "缺失": 缺失, "后台进程": self._后台证据(启动快照, 进程.快照())},
+            )
+        return 执行结果(
+            实验状态.已归档,
+            工件,
+            {"MT5返回码": 返回码, "后台进程": self._后台证据(启动快照, 进程.快照())},
+        )
+
+    @staticmethod
+    def _后台证据(启动: object, 结束: object) -> dict[str, object]:
+        return {
+            "进程号": getattr(启动, "进程号"),
+            "进程组号": getattr(启动, "进程组号"),
+            "已启动时间": getattr(启动, "已启动时间"),
+            "结束状态": getattr(结束, "状态"),
+            "返回码": getattr(结束, "返回码"),
+        }
 
     @staticmethod
     def _受限工件路径(暂存目录: Path, 相对路径: str) -> Path:
@@ -93,13 +116,6 @@ class 隔离MT5执行器:
     @staticmethod
     def _哈希(路径: Path) -> str:
         return sha256(路径.read_bytes()).hexdigest()
-
-    @staticmethod
-    def _终止受控进程组(进程: subprocess.Popen[str]) -> None:
-        if os.name == "posix":
-            os.killpg(进程.pid, signal.SIGTERM)
-        else:
-            进程.terminate()
 
     @staticmethod
     def _执行日志(返回码: int | None, 标准输出: str, 标准错误: str, 超时: bool = False) -> str:

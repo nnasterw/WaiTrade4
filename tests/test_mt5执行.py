@@ -27,7 +27,10 @@ def test_命令成功且工件齐全才能进入归档(tmp_path) -> None:
     结果 = 执行器.执行(_输入(), tmp_path)
 
     assert 结果.状态 is 实验状态.已归档
-    assert set(结果.工件) == {"执行日志.txt", "报告.html"}
+    assert set(结果.工件) == {"执行日志.txt", "报告.html", "后台-stdout.txt", "后台-stderr.txt"}
+    assert (tmp_path / "后台-stdout.txt").is_file()
+    assert (tmp_path / "后台-stderr.txt").is_file()
+    assert 结果.结果["后台进程"]["结束状态"] == "已退出"
 
 
 def test_命令成功但缺失报告仍为执行无效(tmp_path) -> None:

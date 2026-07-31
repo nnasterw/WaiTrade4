@@ -19,7 +19,7 @@ def _报告(*, 初始资金: str = "300.00", 额外结果: str = "") -> str:
 <tr><td>Expert:</td><td>WaiTrade_OB</td></tr><tr><td>Symbol:</td><td>BTCUSDm</td></tr>
 <tr><td>Period:</td><td>M1 (2025.02.01 - 2025.03.01)</td></tr><tr><td>Initial Deposit:</td><td>{初始资金}</td></tr>
 <tr><td>History Quality:</td><td>100% real ticks</td></tr><tr><td>Total Net Profit:</td><td>12.50</td></tr>
-<tr><td>Balance Drawdown Maximal:</td><td>10.00 (3.00%)</td></tr><tr><td>Equity Drawdown Maximal:</td><td>11.00 (3.50%)</td></tr>
+<tr><td>Balance Drawdown Maximal:</td><td>10.00 (0.62%)</td></tr><tr><td>Equity Drawdown Maximal:</td><td>11.00 (3.50%)</td></tr>
 <tr><td>Profit Factor:</td><td>1.25</td></tr><tr><td>Total Trades:</td><td>1</td></tr>{额外结果}
 </table>
 <table><tr><td>Orders</td></tr><tr><td>Open Time</td><td>Order</td><td>Symbol</td><td>Type</td><td>Volume</td><td>Price</td><td>S / L</td><td>T / P</td><td>Time</td><td>State</td><td>Comment</td></tr>
@@ -36,6 +36,7 @@ def test_严格解析报告及orders明细(tmp_path: Path) -> None:
     结果 = 解析MT5报告(_写报告(tmp_path, _报告()), _期望())
 
     assert 结果.净利润 == Decimal("12.50")
+    assert 结果.最大余额回撤比例 == Decimal("0.0062")
     assert 结果.最大权益回撤比例 == Decimal("0.035")
     assert 结果.订单[0].订单号 == 2
     assert 从MT5报告构造验收输入(

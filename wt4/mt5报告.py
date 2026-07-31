@@ -147,13 +147,13 @@ def _金额(value: str, 标签: str) -> Decimal:
 
 
 def _百分比(value: str, 标签: str) -> Decimal:
-    if not re.fullmatch(r"(?:0|[1-9]\d{0,2}(?:\.\d+)?)%", value):
+    if not re.fullmatch(r"(?:0|[1-9]\d{0,2})(?:\.\d+)?%", value):
         raise MT5报告错误(f"{标签}百分比格式异常: {value}")
     return Decimal(value[:-1]) / Decimal("100")
 
 
 def _历史质量与建模方式(value: str) -> tuple[Decimal, str]:
-    匹配 = re.fullmatch(r"((?:0|[1-9]\d{0,2}(?:\.\d+)?)%) (real ticks)", value)
+    匹配 = re.fullmatch(r"((?:0|[1-9]\d{0,2})(?:\.\d+)?%) (real ticks)", value)
     if 匹配 is None:
         raise MT5报告错误(f"History Quality格式或建模方式异常: {value}")
     return _百分比(匹配.group(1), "History Quality"), 匹配.group(2)
