@@ -196,7 +196,14 @@ def main() -> None:
     )
     结果 = 编排器.运行(
         输入,
-        单实例MT5探测执行器(配置, 实参.wine, 实参.wine前缀, 实参.超时秒数, 实参.mihomo日志),
+        单实例MT5探测执行器(
+            配置,
+            实参.wine,
+            实参.wine前缀,
+            实参.超时秒数,
+            实参.mihomo日志,
+            离线代理隔离=实参.离线代理隔离,
+        ),
     )
     print(json.dumps({"输入": asdict(配置), "实验身份": 结果.实验身份, "状态": 结果.状态, "工件目录": str(结果.工件目录) if 结果.工件目录 else None}, ensure_ascii=False, default=str))
 

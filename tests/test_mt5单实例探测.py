@@ -9,6 +9,7 @@ from wt4.mt5单实例探测 import (
     解析MihomoTCP时间窗口候选,
     解析MT5实际测试区间,
     解析MT5代理同步诊断,
+    核验离线代理隔离结果,
     解析MT5生命周期,
     核验MT5严格SOCKS5链路,
     解析MT5连接端点,
@@ -117,6 +118,30 @@ MO\t0\t20:23:46.000\tNetwork\tterminal synchronized with Exness Technologies Ltd
     assert "不匹配" in 核验MT5严格SOCKS5链路(完整日志, "127.0.0.1:1")[0]
     缺少授权 = 核验MT5严格SOCKS5链路("DG\t0\t20:23:44.439\tProxy\tconnecting through SOCKS5 proxy 127.0.0.1:7897", "127.0.0.1:7897")
     assert any("授权" in 原因 for 原因 in 缺少授权)
+
+
+def test_离线代理隔离拒绝仍完成授权同步和回测的运行() -> None:
+    日志 = """
+Proxy\tconnecting through SOCKS5 proxy 127.0.0.1:1
+Network\tauthorized on Exness-MT5Trial5 through Access Point #5
+Network\tterminal synchronized with Exness Technologies Ltd
+Tester\tautomatical testing started
+Tester\tlast test passed with result \"successfully finished\" in 0:00:01
+Terminal\texit with code 0
+"""
+
+    assert 核验离线代理隔离结果(日志) == {
+        "通过": False,
+        "结论": "离线代理下仍完成MT5成功链路",
+        "原因": "存在连接复用或直连回退风险，未实锤代理隔离",
+    }
+
+
+def test_离线代理隔离接受未形成授权同步和完整回测的运行() -> None:
+    结果 = 核验离线代理隔离结果("Proxy\tconnecting through SOCKS5 proxy 127.0.0.1:1\nTester\tnot synchronized with trade server")
+
+    assert 结果["通过"] is True
+    assert 结果["结论"] == "离线代理未形成MT5成功链路"
 
 
 def test_日志解码同时保留_utf8_tester_和_utf16le_terminal_证据() -> None:
