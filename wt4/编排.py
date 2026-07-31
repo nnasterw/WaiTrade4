@@ -5,7 +5,6 @@ from enum import StrEnum
 from hashlib import sha256
 import json
 from pathlib import Path
-import shutil
 from typing import Protocol
 
 from wt4.experiment import 实验输入
