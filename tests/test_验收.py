@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from wt4.验收 import 验收输入, 评估硬门槛
 from wt4.验收 import 从MT5报告构造验收输入
-from wt4.风险 import 重演MT5已实现余额, 重演MT5成交风险
+from wt4.风险 import 重演MT5已实现余额, 重演MT5成交风险, 重演逐tick日内权益风险
 from tests.test_风险重演 import _报告
 
 
@@ -78,3 +78,19 @@ def test_报告已实现日损失达到十百分比红线不能验收() -> None:
     )
 
     assert "Deals已实现日损失达到上限" in 评估硬门槛(输入).失败原因
+
+
+def test_逐tick日内权益浮亏触及十百分比红线不能验收() -> None:
+    报告 = _报告()
+    输入 = 从MT5报告构造验收输入(
+        报告, 声明建模方式=4, 压力封存净收益=Decimal("1"), 极端压力风险通过=True,
+        输入工件完整=True, 治理通过=True, 已实现余额重演=重演MT5已实现余额(报告),
+        成交风险重演=重演MT5成交风险(报告), 逐tick权益证据完整=True,
+        逐tick日内权益风险=重演逐tick日内权益风险([
+            权益点("2025.01.01 00:00:00", Decimal("300"), Decimal("300")),
+            权益点("2025.01.01 12:00:00", Decimal("300"), Decimal("270")),
+            权益点("2025.01.01 23:00:00", Decimal("305"), Decimal("305")),
+        ]),
+    )
+
+    assert "逐tick日内权益亏损达到上限" in 评估硬门槛(输入).失败原因

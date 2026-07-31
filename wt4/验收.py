@@ -4,7 +4,13 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from wt4.mt5报告 import MT5报告摘要
-from wt4.风险 import 已实现余额重演结果, 成交风险重演结果, 权益点, 风险规则
+from wt4.风险 import (
+    已实现余额重演结果,
+    成交风险重演结果,
+    权益点,
+    逐tick日内权益风险结果,
+    风险规则,
+)
 
 
 @dataclass(frozen=True)
@@ -20,6 +26,7 @@ class 验收输入:
     报告最大权益回撤比例: Decimal | None = None
     日初余额: dict[str, Decimal] | None = None
     已实现日损失: dict[str, Decimal] | None = None
+    逐tick日内权益风险: 逐tick日内权益风险结果 | None = None
 
 
 @dataclass(frozen=True)
@@ -42,6 +49,7 @@ def 从MT5报告构造验收输入(
     已实现余额重演: 已实现余额重演结果 | None = None,
     成交风险重演: 成交风险重演结果 | None = None,
     逐tick权益证据完整: bool = False,
+    逐tick日内权益风险: 逐tick日内权益风险结果 | None = None,
 ) -> 验收输入:
     """把已严格解析且身份已核验的报告转为验收所需事实。
 
@@ -58,10 +66,16 @@ def 从MT5报告构造验收输入(
         输入工件完整=输入工件完整,
         治理通过=治理通过,
         已实现余额重演通过=已实现余额重演 is not None and 已实现余额重演.通过,
-        权益风险证据完整=逐tick权益证据完整 and 成交风险重演 is not None and 成交风险重演.开放风险证据完整,
+        权益风险证据完整=(
+            逐tick权益证据完整
+            and 逐tick日内权益风险 is not None
+            and 成交风险重演 is not None
+            and 成交风险重演.开放风险证据完整
+        ),
         报告最大权益回撤比例=报告.最大权益回撤比例,
         日初余额=dict(成交风险重演.日初余额) if 成交风险重演 is not None else None,
         已实现日损失=dict(成交风险重演.已实现日损失) if 成交风险重演 is not None else None,
+        逐tick日内权益风险=逐tick日内权益风险,
     )
 
 
@@ -84,6 +98,11 @@ def 评估硬门槛(输入: 验收输入) -> 硬门槛结果:
         失败原因.append("Deals已实现余额独立重演未通过")
     if not 输入.权益风险证据完整:
         失败原因.append("逐tick权益与开放风险证据不完整")
+    if 输入.逐tick日内权益风险 is None:
+        if 输入.权益风险证据完整:
+            失败原因.append("逐tick权益与开放风险证据不完整")
+    elif 输入.逐tick日内权益风险.达到单日亏损上限日期:
+        失败原因.append("逐tick日内权益亏损达到上限")
     if 输入.报告最大权益回撤比例 is None:
         失败原因.append("报告最大权益回撤证据不完整")
     elif 输入.报告最大权益回撤比例 >= 规则.最大权益回撤:

@@ -63,6 +63,25 @@ class 成交风险重演结果:
         return not self.证据缺失
 
 
+@dataclass(frozen=True)
+class 逐tick日内权益风险结果:
+    """由独立逐 tick 权益序列重演的服务器自然日日内风险。"""
+
+    日初权益: dict[str, Decimal]
+    日内最低权益: dict[str, Decimal]
+    日净出入金: dict[str, Decimal]
+    日内最大亏损: dict[str, Decimal]
+    规则: 风险规则
+
+    @property
+    def 达到单日亏损上限日期(self) -> tuple[str, ...]:
+        return tuple(
+            日期
+            for 日期, 损失 in self.日内最大亏损.items()
+            if 损失 >= self.日初权益[日期] * self.规则.单日亏损上限
+        )
+
+
 def 计算初始风险(*, 入场价: Decimal, 止损价: Decimal, 手数: Decimal, 每价格单位价值: Decimal, 双边佣金: Decimal, 开仓压力滑点价格: Decimal) -> Decimal:
     if 手数 <= 0 or 每价格单位价值 <= 0 or 双边佣金 < 0 or 开仓压力滑点价格 < 0:
         raise ValueError("风险输入必须有效且非负")
@@ -160,6 +179,40 @@ def 计算当日亏损(日初权益: Decimal, 当前权益: Decimal, 当日出�
     if 日初权益 <= 0:
         raise ValueError("日初权益必须为正")
     return max(Decimal("0"), 日初权益 - (当前权益 - 当日出入金净额))
+
+
+def 重演逐tick日内权益风险(
+    权益曲线: list[权益点],
+    日净出入金: dict[str, Decimal] | None = None,
+    规则: 风险规则 = 风险规则(),
+) -> 逐tick日内权益风险结果:
+    """逐点回放日内权益，避免将最终 Deals 盈亏冒充盘中最大浮亏。
+
+    ``日净出入金`` 必须由独立资金流水提供；本函数不从余额变化臆测。
+    """
+    if not 权益曲线:
+        raise ValueError("权益曲线不能为空")
+    日净出入金 = dict(日净出入金 or {})
+    日初权益: dict[str, Decimal] = {}
+    日内最低权益: dict[str, Decimal] = {}
+    日内最大亏损: dict[str, Decimal] = {}
+    for 点 in 权益曲线:
+        try:
+            日期 = datetime.strptime(点.时间, "%Y.%m.%d %H:%M:%S").date().isoformat()
+        except ValueError as 错误:
+            raise ValueError("逐tick权益时间必须为YYYY.MM.DD HH:MM:SS") from 错误
+        if 点.权益 <= 0:
+            raise ValueError("逐tick权益必须为正")
+        if 日期 not in 日初权益:
+            日初权益[日期] = 点.权益
+            日内最低权益[日期] = 点.权益
+            日内最大亏损[日期] = Decimal("0")
+        日内最低权益[日期] = min(日内最低权益[日期], 点.权益)
+        日内最大亏损[日期] = max(
+            日内最大亏损[日期],
+            计算当日亏损(日初权益[日期], 点.权益, 日净出入金.get(日期, Decimal("0"))),
+        )
+    return 逐tick日内权益风险结果(日初权益, 日内最低权益, 日净出入金, 日内最大亏损, 规则)
 
 
 def 核验风险限额(*, 当前权益: Decimal, 日初权益: Decimal, 单笔初始风险: Decimal, 开放初始风险: Decimal, 当日亏损: Decimal, 规则: 风险规则) -> list[str]:

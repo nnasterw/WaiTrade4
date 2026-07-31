@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from decimal import Decimal
 
-from wt4.风险 import 权益点, 风险规则, 核验权益曲线, 计算初始风险
+from wt4.风险 import 权益点, 风险规则, 核验权益曲线, 计算初始风险, 重演逐tick日内权益风险
 from wt4.mt5报告 import 成交明细, MT5报告摘要
 from wt4.风险 import 重演MT5已实现余额, 重演MT5成交风险
 
@@ -85,3 +85,28 @@ def test_单笔和开放风险不能越过各自上限() -> None:
         当日亏损=Decimal("31"), 规则=风险规则(),
     )
     assert set(失败) == {"单笔风险超过候选上限", "开放初始风险超过上限", "当日亏损达到上限"}
+
+
+def test_逐tick日内权益回放捕获盘中亏损后盈利的十百分比越界() -> None:
+    结果 = 重演逐tick日内权益风险([
+        权益点("2025.01.01 00:00:00", Decimal("300"), Decimal("300")),
+        权益点("2025.01.01 10:00:00", Decimal("300"), Decimal("269")),
+        权益点("2025.01.01 23:00:00", Decimal("330"), Decimal("330")),
+    ])
+
+    assert 结果.日初权益 == {"2025-01-01": Decimal("300")}
+    assert 结果.日内最低权益 == {"2025-01-01": Decimal("269")}
+    assert 结果.日内最大亏损 == {"2025-01-01": Decimal("31")}
+    assert 结果.达到单日亏损上限日期 == ("2025-01-01",)
+
+
+def test_逐tick日内权益回放以外部入金校正日内亏损() -> None:
+    结果 = 重演逐tick日内权益风险(
+        [
+            权益点("2025.01.01 00:00:00", Decimal("300"), Decimal("300")),
+            权益点("2025.01.01 10:00:00", Decimal("320"), Decimal("285")),
+        ],
+        {"2025-01-01": Decimal("20")},
+    )
+
+    assert 结果.日内最大亏损 == {"2025-01-01": Decimal("35")}
