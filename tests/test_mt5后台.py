@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import sys
@@ -73,6 +74,25 @@ def test_归属记录验证片段不匹配时绝不回收进程(tmp_path: Path) 
     归属记录 = 实验目录 / "后台-归属.json"
     assert MT5后台进程.回收遗留自有进程组(归属记录) is False
     assert 进程.快照().状态 == "运行中"
+    进程.终止自有进程组()
+    assert 进程.等待(5) is not None
+
+
+def test_归属记录实验目录不匹配时绝不回收进程(tmp_path: Path) -> None:
+    实验目录 = tmp_path / ("c" * 64)
+    实验目录.mkdir()
+    进程 = MT5后台进程.启动(
+        (sys.executable, "-c", f"import time; 受控实验={str(实验目录)!r}; time.sleep(30)"),
+        实验目录,
+        dict(os.environ),
+        实验目录,
+    )
+    归属记录 = 实验目录 / "后台-归属.json"
+    内容 = json.loads(归属记录.read_text(encoding="utf-8"))
+    内容["实验目录"] = str(tmp_path / "伪造")
+    归属记录.write_text(json.dumps(内容), encoding="utf-8")
+
+    assert MT5后台进程.回收遗留自有进程组(归属记录) is False
     进程.终止自有进程组()
     assert 进程.等待(5) is not None
 

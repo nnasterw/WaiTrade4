@@ -124,6 +124,21 @@ def test_受限恢复在进程组证据通过后才追加无效终态(tmp_path, 
     assert [事件.类型 for 事件 in 账本.事件(输入.身份)] == ["已创建", "执行无效"]
 
 
+def test_受限恢复确认进程组已不存在后才追加无效终态(tmp_path, monkeypatch) -> None:
+    账本 = 追加式账本(tmp_path / "账本.sqlite")
+    编排器 = 中央实验编排器(账本, tmp_path / "暂存", tmp_path / "工件")
+    输入 = _输入({"任务": "已退出恢复"})
+    暂存目录 = tmp_path / "暂存" / 输入.身份
+    暂存目录.mkdir(parents=True)
+    账本.追加(输入.身份, 实验状态.已创建, {"输入": {}})
+
+    monkeypatch.setattr(MT5后台进程, "回收遗留自有进程组", lambda _: False)
+    monkeypatch.setattr(MT5后台进程, "确认遗留自有进程组已退出", lambda _: True)
+
+    assert 编排器.受限恢复遗留后台实验(输入.身份) is True
+    assert [事件.类型 for 事件 in 账本.事件(输入.身份)] == ["已创建", "执行无效"]
+
+
 class _留痕执行器:
     def __init__(self, 名称: str, 顺序: list[str], 放行: Event | None = None, 失败: bool = False) -> None:
         self.名称 = 名称

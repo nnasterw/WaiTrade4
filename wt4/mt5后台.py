@@ -115,7 +115,10 @@ class MT5后台进程:
             return None
         if 内容["进程号"] != 内容["进程组号"]:
             return None
-        if not isinstance(内容.get("命令验证片段"), str) or not 内容["命令验证片段"]:
+        实验目录 = 归属记录.parent.resolve()
+        if 内容.get("实验目录") != str(实验目录):
+            return None
+        if 内容.get("命令验证片段") != 实验目录.name:
             return None
         return 内容
 
@@ -160,6 +163,31 @@ class MT5后台进程:
                 cls._更新归属记录状态(归属记录, 内容, "已受限回收")
                 return True
             sleep(0.1)
+        return False
+
+    @classmethod
+    def 确认遗留自有进程组已退出(cls, 归属记录: Path) -> bool:
+        """确认有效归属记录对应的进程组已经不存在，但绝不发送信号。
+
+        这只用于宿主已提前退出、进程组又已由系统收敛的场景。既要确认
+        ``ps`` 中没有非僵尸成员，也要以 ``killpg(..., 0)`` 得到
+        ``ProcessLookupError``，避免把 PID/PGID 复用或短暂僵尸误判为结束。
+        """
+        if os.name != "posix":
+            return False
+        内容 = cls._读取归属记录(归属记录)
+        if 内容 is None or 内容.get("状态") != "运行中":
+            return False
+        进程组号 = int(内容["进程组号"])
+        if cls._进程组成员(进程组号):
+            return False
+        try:
+            os.killpg(进程组号, 0)
+        except ProcessLookupError:
+            cls._更新归属记录状态(归属记录, 内容, "已确认退出")
+            return True
+        except PermissionError:
+            return False
         return False
 
     @staticmethod
