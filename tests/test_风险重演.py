@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from wt4.风险 import 权益点, 风险规则, 核验权益曲线, 计算初始风险
 from wt4.mt5报告 import 成交明细, MT5报告摘要
-from wt4.风险 import 重演MT5已实现余额
+from wt4.风险 import 重演MT5已实现余额, 重演MT5成交风险
 
 
 def _报告(*, 余额回撤金额: Decimal = Decimal("10")) -> MT5报告摘要:
@@ -46,6 +46,16 @@ def test_deals回撤与报告不一致不能通过() -> None:
     结果 = 重演MT5已实现余额(_报告(余额回撤金额=Decimal("9")))
 
     assert "已实现最大余额回撤金额与报告不一致" in 结果.失败原因
+
+
+def test_deals能重演净持仓和已实现日损失但拒绝臆造开放风险() -> None:
+    结果 = 重演MT5成交风险(_报告())
+
+    assert [快照.净手数 for 快照 in 结果.持仓快照] == [Decimal("0"), Decimal("0.01"), Decimal("0")]
+    assert 结果.已实现日损失 == {"2025-01-01": Decimal("10")}
+    assert not 结果.开放风险证据完整
+    assert 结果.持仓快照[1].开放初始风险 is None
+    assert "服务器止损" in 结果.持仓快照[1].原因
 
 from wt4.风险 import 计算当日亏损, 核验风险限额
 

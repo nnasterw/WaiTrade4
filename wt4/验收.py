@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from wt4.mt5报告 import MT5报告摘要
-from wt4.风险 import 已实现余额重演结果, 权益点
+from wt4.风险 import 已实现余额重演结果, 成交风险重演结果, 权益点
 
 
 @dataclass(frozen=True)
@@ -37,7 +37,8 @@ def 从MT5报告构造验收输入(
     输入工件完整: bool,
     治理通过: bool,
     已实现余额重演: 已实现余额重演结果 | None = None,
-    权益风险证据完整: bool = False,
+    成交风险重演: 成交风险重演结果 | None = None,
+    逐tick权益证据完整: bool = False,
 ) -> 验收输入:
     """把已严格解析且身份已核验的报告转为验收所需事实。
 
@@ -54,7 +55,7 @@ def 从MT5报告构造验收输入(
         输入工件完整=输入工件完整,
         治理通过=治理通过,
         已实现余额重演通过=已实现余额重演 is not None and 已实现余额重演.通过,
-        权益风险证据完整=权益风险证据完整,
+        权益风险证据完整=逐tick权益证据完整 and 成交风险重演 is not None and 成交风险重演.开放风险证据完整,
     )
 
 

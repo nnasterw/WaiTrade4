@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -40,6 +41,25 @@ class 已实现余额重演结果:
     @property
     def 通过(self) -> bool:
         return not self.失败原因
+
+
+@dataclass(frozen=True)
+class 持仓风险快照:
+    时间: str
+    净手数: Decimal
+    开放初始风险: Decimal | None
+    原因: str | None
+
+
+@dataclass(frozen=True)
+class 成交风险重演结果:
+    持仓快照: tuple[持仓风险快照, ...]
+    已实现日损失: dict[str, Decimal]
+    证据缺失: tuple[str, ...]
+
+    @property
+    def 开放风险证据完整(self) -> bool:
+        return not self.证据缺失
 
 
 def 计算初始风险(*, 入场价: Decimal, 止损价: Decimal, 手数: Decimal, 每价格单位价值: Decimal, 双边佣金: Decimal, 开仓压力滑点价格: Decimal) -> Decimal:
@@ -93,6 +113,42 @@ def 重演MT5已实现余额(报告: MT5报告摘要) -> 已实现余额重演�
     if abs(最大回撤比例 - 报告.最大余额回撤比例) > Decimal("0.00005"):
         失败.append("已实现最大余额回撤比例与报告不一致")
     return 已实现余额重演结果(曲线, 最大回撤金额, 最大回撤比例, tuple(失败))
+
+
+def 重演MT5成交风险(报告: MT5报告摘要) -> 成交风险重演结果:
+    """重演净持仓和已实现日损失；缺少成交时服务器止损时必须明确降级。"""
+    if not 报告.成交:
+        raise ValueError("成交明细不能为空")
+    净手数 = Decimal("0")
+    快照: list[持仓风险快照] = []
+    日初余额: dict[str, Decimal] = {}
+    已实现日损失: dict[str, Decimal] = {}
+    证据缺失: list[str] = []
+    上一余额: Decimal | None = None
+    for 成交 in 报告.成交:
+        日期 = datetime.strptime(成交.时间, "%Y.%m.%d %H:%M:%S").date().isoformat()
+        if 日期 not in 日初余额:
+            日初余额[日期] = 成交.余额 if 上一余额 is None else 上一余额
+        已实现日损失[日期] = max(
+            已实现日损失.get(日期, Decimal("0")),
+            日初余额[日期] - 成交.余额,
+            Decimal("0"),
+        )
+        if 成交.类型 == "balance":
+            快照.append(持仓风险快照(成交.时间, 净手数, Decimal("0"), None))
+            上一余额 = 成交.余额
+            continue
+        assert 成交.手数 is not None
+        变化 = 成交.手数 if 成交.类型 == "buy" else -成交.手数
+        净手数 += 变化
+        原因 = None
+        风险: Decimal | None = Decimal("0") if 净手数 == 0 else None
+        if 风险 is None:
+            原因 = "成交报告未提供成交时服务器止损与合约每价格单位价值"
+            证据缺失.append(f"{成交.成交号}:{原因}")
+        快照.append(持仓风险快照(成交.时间, 净手数, 风险, 原因))
+        上一余额 = 成交.余额
+    return 成交风险重演结果(tuple(快照), 已实现日损失, tuple(证据缺失))
 
 
 def 计算当日亏损(日初权益: Decimal, 当前权益: Decimal, 当日出入金净额: Decimal = Decimal("0")) -> Decimal:

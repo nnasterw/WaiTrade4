@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from wt4.mt5报告 import MT5报告错误, 报告期望, 解析MT5报告
-from wt4.风险 import 重演MT5已实现余额
+from wt4.风险 import 重演MT5已实现余额, 重演MT5成交风险
 from wt4.验收 import 从MT5报告构造验收输入
 
 
@@ -55,10 +55,12 @@ def test_严格解析报告及orders明细(tmp_path: Path) -> None:
         输入工件完整=True,
         治理通过=True,
         已实现余额重演=重演MT5已实现余额(结果),
-        权益风险证据完整=True,
+        成交风险重演=重演MT5成交风险(结果),
+        逐tick权益证据完整=True,
     )
     assert 验收输入.封存净收益 == Decimal("12.50")
     assert 验收输入.已实现余额重演通过
+    assert not 验收输入.权益风险证据完整
 
 
 def test_拒绝无bom或非utf16le报告(tmp_path: Path) -> None:
