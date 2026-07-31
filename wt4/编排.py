@@ -15,7 +15,12 @@ from wt4.experiment import 实验输入, 核验正式策略验收单期, 核验�
 from wt4.工件 import 归档工件
 from wt4.账本 import 追加式账本
 from wt4.评分 import 评分原料
-from wt4.正式验收工件 import 读取开仓风险工件, 读取逐tick权益工件
+from wt4.正式验收工件 import (
+    构造正式验收风险工件,
+    读取开仓风险工件,
+    读取逐tick权益工件,
+)
+from wt4.mt5报告 import 报告期望, 解析MT5报告
 from wt4.验收 import 验收输入, 评估硬门槛
 from wt4.风险 import 重演逐tick日内权益风险, 重演风险限额
 from wt4.窗口 import 生成验收窗口
@@ -40,6 +45,9 @@ class 执行结果:
     验收输入: 验收输入 | None = None
     评分原料: 评分原料 | None = None
     风险证据工件: tuple[str, str, str] | None = None
+    # 正式验收必须把原始 UTF-16LE MT5 报告作为已哈希工件声明；
+    # 周期和专家由执行器明确声明，其他身份字段只能从冻结实验输入推导。
+    报告工件: tuple[str, str, str] | None = None
 
 
 class MT5执行器(Protocol):
@@ -170,7 +178,7 @@ class 中央实验编排器:
             return 执行结果(
                 实验状态.治理无效, {}, {**结果.结果, "原因": "正式策略验收缺少独立硬门或评分原料"},
             )
-        if not 结果.验收输入.权益风险证据完整 or not _核验封存风险证据工件(结果, 暂存目录):
+        if not 结果.验收输入.权益风险证据完整 or not _核验封存风险证据工件(输入, 结果, 暂存目录):
             return 执行结果(
                 实验状态.治理无效, {}, {**结果.结果, "原因": "正式策略验收缺少封存逐tick权益与风险快照工件"},
             )
@@ -199,7 +207,7 @@ def _序列化评分原料(原料: 评分原料) -> dict[str, object]:
     return {名称: str(值) if isinstance(值, Decimal) else 值 for 名称, 值 in asdict(原料).items()}
 
 
-def _核验封存风险证据工件(结果: 执行结果, 暂存目录: Path) -> bool:
+def _核验封存风险证据工件(输入: 实验输入, 结果: 执行结果, 暂存目录: Path) -> bool:
     """正式验收不能将调用者布尔字段当作逐 tick 风险证据。
 
     执行器必须明确声明逐 tick 权益、独立成交风险、风险限额三份结构化工件，并把
@@ -237,23 +245,67 @@ def _核验封存风险证据工件(结果: 执行结果, 暂存目录: Path) ->
     权益路径, _ = 权益项[0]
     风险路径, _ = 风险项[0]
     _, 限额内容 = 限额项[0]
+    报告声明 = 结果.报告工件
+    if (
+        报告声明 is None
+        or len(报告声明) != 3
+        or not all(isinstance(项, str) and 项 for 项 in 报告声明)
+    ):
+        return False
+    报告名称, 专家, 周期 = 报告声明
+    报告相对路径 = Path(报告名称)
+    报告路径 = 暂存目录 / 报告相对路径
+    if (
+        报告相对路径.is_absolute()
+        or ".." in 报告相对路径.parts
+        or not 报告路径.is_file()
+        or 报告路径.is_symlink()
+        or 结果.工件.get(报告名称) != sha256(报告路径.read_bytes()).hexdigest()
+    ):
+        return False
     if 限额内容.get("来源") != "由报告、逐tick权益与独立开仓风险工件重演":
         return False
     源哈希 = 限额内容.get("源工件哈希")
     if not isinstance(源哈希, dict) or 源哈希 != {
+        "MT5报告": sha256(报告路径.read_bytes()).hexdigest(),
         "逐tick权益": sha256(权益路径.read_bytes()).hexdigest(),
         "开仓风险": sha256(风险路径.read_bytes()).hexdigest(),
     }:
         return False
     try:
+        报告 = 解析MT5报告(
+            报告路径,
+            报告期望(
+                专家, 输入.交易品种 or "", 周期,
+                输入.起始日.replace("-", "."), 输入.结束日.replace("-", "."),
+                Decimal(输入.初始资金 or "0"),
+            ),
+        )
+        if 报告.建模方式 != "real ticks":
+            return False
         权益 = 读取逐tick权益工件(权益路径)
         开仓风险 = 读取开仓风险工件(风险路径)
         逐tick重演 = 重演逐tick日内权益风险(权益)
         风险重演 = 重演风险限额([项.快照 for 项 in 开仓风险])
+        _, 报告验收输入 = 构造正式验收风险工件(
+            报告=报告,
+            报告路径=报告路径,
+            逐tick权益路径=权益路径,
+            成交风险路径=风险路径,
+            压力封存净收益=结果.验收输入.压力封存净收益,
+            极端压力风险通过=结果.验收输入.极端压力风险通过,
+            输入工件完整=结果.验收输入.输入工件完整,
+            治理通过=结果.验收输入.治理通过,
+        )
     except (ValueError, ArithmeticError):
         return False
     验收 = 结果.验收输入
-    if 验收 is None or 验收.逐tick日内权益风险 != 逐tick重演 or 验收.风险限额重演 != 风险重演:
+    if (
+        验收 is None
+        or 验收.逐tick日内权益风险 != 逐tick重演
+        or 验收.风险限额重演 != 风险重演
+        or 验收 != 报告验收输入
+    ):
         return False
     if (
         限额内容.get("最大单笔初始风险比例") != str(风险重演.最大单笔初始风险比例)

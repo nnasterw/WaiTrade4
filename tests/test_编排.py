@@ -13,6 +13,8 @@ import pytest
 from wt4.experiment import 实验输入
 from wt4.评分 import 评分原料
 from wt4.验收 import 验收输入
+from wt4.mt5报告 import 报告期望, 解析MT5报告
+from wt4.正式验收工件 import 完成正式验收风险桥接
 from wt4.风险 import 风险限额快照, 重演风险限额, 权益点, 重演逐tick日内权益风险
 from wt4.mt5后台 import MT5后台进程
 from wt4.编排 import (
@@ -99,34 +101,40 @@ class _正式成功执行器:
 
     def 执行(self, 输入: 实验输入, 暂存目录: Path) -> 执行结果:
         self.执行次数 += 1
-        报告 = 暂存目录 / "报告.txt"
-        报告.write_text(输入.起始日, encoding="utf-8")
+        开始日 = 输入.起始日.replace("-", ".")
+        结束日 = 输入.结束日.replace("-", ".")
+        报告 = 暂存目录 / "报告.html"
+        报告.write_bytes(b"\xff\xfe" + f'''<html><body><table>
+<tr><td>Expert:</td><td>WaiTrade_OB</td></tr><tr><td>Symbol:</td><td>BTCUSDm</td></tr>
+<tr><td>Period:</td><td>M1 ({开始日} - {结束日})</td></tr><tr><td>Initial Deposit:</td><td>300.00</td></tr>
+<tr><td>History Quality:</td><td>100% real ticks</td></tr><tr><td>Total Net Profit:</td><td>12.50</td></tr>
+<tr><td>Balance Drawdown Maximal:</td><td>0.00 (0.00%)</td></tr><tr><td>Equity Drawdown Maximal:</td><td>11.00 (3.50%)</td></tr>
+<tr><td>Profit Factor:</td><td>1.25</td></tr><tr><td>Total Trades:</td><td>1</td></tr><tr><td>Total Deals:</td><td>2</td></tr></table>
+<table><tr><td>Orders</td></tr><tr><td>Open Time</td><td>Order</td><td>Symbol</td><td>Type</td><td>Volume</td><td>Price</td><td>S / L</td><td>T / P</td><td>Time</td><td>State</td><td>Comment</td></tr>
+<tr><td>{开始日} 00:00:00</td><td>2</td><td>BTCUSDm</td><td>sell</td><td>0.01 / 0.01</td><td>0.00</td><td>99063.02</td><td></td><td>{开始日} 00:00:00</td><td>filled</td><td>x</td></tr>
+<tr><td>Deals</td></tr><tr><td>Time</td><td>Deal</td><td>Symbol</td><td>Type</td><td>Direction</td><td>Volume</td><td>Price</td><td>Order</td><td>Commission</td><td>Swap</td><td>Profit</td><td>Balance</td><td>Comment</td></tr>
+<tr><td>{开始日} 00:00:00</td><td>1</td><td></td><td>balance</td><td></td><td></td><td></td><td></td><td>0.00</td><td>0.00</td><td>300.00</td><td>300.00</td><td></td></tr>
+<tr><td>{开始日} 00:00:01</td><td>2</td><td>BTCUSDm</td><td>sell</td><td>in</td><td>0.01</td><td>99000.00</td><td>2</td><td>0.00</td><td>0.00</td><td>0.00</td><td>300.00</td><td>x</td></tr>
+<tr><td>{开始日} 00:00:02</td><td>3</td><td>BTCUSDm</td><td>buy</td><td>out</td><td>0.01</td><td>98875.00</td><td>3</td><td>0.00</td><td>0.00</td><td>12.50</td><td>312.50</td><td>x</td></tr></table></body></html>'''.encode("utf-16le"))
         权益 = 暂存目录 / "逐tick权益.json"
         成交风险 = 暂存目录 / "成交风险.json"
         风险 = 暂存目录 / "风险限额.json"
         权益.write_text(
-            '{"权益点":[{"时间":"2026.01.01 00:00:00","余额":"300","权益":"300"}]}',
+            f'{{"权益点":[{{"时间":"{开始日} 00:00:00","余额":"300","权益":"300"}},'
+            f'{{"时间":"{开始日} 00:00:01","余额":"300","权益":"300"}},'
+            f'{{"时间":"{开始日} 00:00:02","余额":"312.5","权益":"312.5"}}]}}',
             encoding="utf-8",
         )
         成交风险.write_text(
-            '{"开仓风险":[{"成交号":2,"时间":"2026.01.01 00:00:00","当前权益":"300",'
+            f'{{"开仓风险":[{{"成交号":2,"时间":"{开始日} 00:00:01","当前权益":"300",'
             '"单笔初始风险":"1","开放初始风险":"1"}]}',
             encoding="utf-8",
         )
-        风险重演 = 重演风险限额([
-            风险限额快照("2026.01.01 00:00:00", Decimal("300"), Decimal("1"), Decimal("1")),
-        ])
-        风险.write_text(json.dumps({
-            "来源": "由报告、逐tick权益与独立开仓风险工件重演",
-            "源工件哈希": {
-                "逐tick权益": sha256(权益.read_bytes()).hexdigest(),
-                "开仓风险": sha256(成交风险.read_bytes()).hexdigest(),
-            },
-            "最大单笔初始风险比例": str(风险重演.最大单笔初始风险比例),
-            "最大开放初始风险比例": str(风险重演.最大开放初始风险比例),
-            "失败原因": list(风险重演.失败原因),
-        }, ensure_ascii=False), encoding="utf-8")
-        验收 = _验收输入()
+        报告摘要 = 解析MT5报告(报告, 报告期望("WaiTrade_OB", "BTCUSDm", "M1", 开始日, 结束日, Decimal("300")))
+        验收 = 完成正式验收风险桥接(
+            报告=报告摘要, 报告路径=报告, 逐tick权益路径=权益, 成交风险路径=成交风险, 风险限额路径=风险,
+            压力封存净收益=Decimal("2"), 极端压力风险通过=True, 输入工件完整=True, 治理通过=True,
+        )
         if self.失败:
             验收 = 验收.__class__(
                 **{**验收.__dict__, "压力封存净收益": Decimal("-1")}
@@ -135,6 +143,7 @@ class _正式成功执行器:
         return 执行结果(
             实验状态.已归档, 工件, {}, 验收输入=验收, 评分原料=_评分原料(),
             风险证据工件=None if self.缺少风险证据 else (权益.name, 成交风险.name, 风险.name),
+            报告工件=(报告.name, "WaiTrade_OB", "M1"),
         )
 
 
@@ -154,6 +163,28 @@ class _占位风险工件执行器(_正式成功执行器):
             路径.write_text(json.dumps(内容, ensure_ascii=False), encoding="utf-8")
             工件[名称] = sha256(路径.read_bytes()).hexdigest()
         return replace(结果, 工件=工件)
+
+
+class _漏报开仓风险执行器(_正式成功执行器):
+    """模拟风险快照与报告中的真实开仓集合脱钩。"""
+
+    def 执行(self, 输入: 实验输入, 暂存目录: Path) -> 执行结果:
+        结果 = super().执行(输入, 暂存目录)
+        风险 = 暂存目录 / "成交风险.json"
+        风险.write_text('{"开仓风险":[]}', encoding="utf-8")
+        # 重建限额工件哈希，确保测试命中的是报告 Deals 完整性而非旧哈希。
+        限额 = 暂存目录 / "风险限额.json"
+        内容 = json.loads(限额.read_text(encoding="utf-8"))
+        内容["源工件哈希"]["开仓风险"] = sha256(风险.read_bytes()).hexdigest()
+        内容["最大单笔初始风险比例"] = None
+        内容["最大开放初始风险比例"] = None
+        内容["失败原因"] = ["没有开仓风险证据"]
+        限额.write_text(json.dumps(内容, ensure_ascii=False), encoding="utf-8")
+        工件 = dict(结果.工件)
+        工件[风险.name] = sha256(风险.read_bytes()).hexdigest()
+        工件[限额.name] = sha256(限额.read_bytes()).hexdigest()
+        # 伪造调用者内存验收对象，编排器必须从报告自行否决。
+        return replace(结果, 工件=工件, 验收输入=_验收输入())
 
 
 def test_成功实验原子归档并写入完整事件链(tmp_path) -> None:
@@ -392,6 +423,16 @@ def test_正式验收拒绝任意JSON占位风险工件(tmp_path) -> None:
 
     assert 结果.状态 is 实验状态.治理无效
     assert "封存逐tick权益" in 账本.事件(输入.身份)[-1].内容["原因"]
+
+
+def test_正式验收拒绝风险工件遗漏原始报告开仓(tmp_path) -> None:
+    账本 = 追加式账本(tmp_path / "账本.sqlite")
+    编排器 = 中央实验编排器(账本, tmp_path / "暂存", tmp_path / "工件")
+
+    结果 = 编排器.运行(_正式输入("2024-07-01", "2024-12-31"), _漏报开仓风险执行器())
+
+    assert 结果.状态 is 实验状态.治理无效
+    assert "封存逐tick权益" in 账本.事件(结果.实验身份)[-1].内容["原因"]
 
 
 def test_正式四周期先冻结范围_逐期硬门通过才归档评分基线(tmp_path) -> None:
