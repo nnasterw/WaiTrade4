@@ -86,9 +86,56 @@ def 写入MT5持久SOCKS5配置(配置: MT5短窗口探测配置) -> Path:
     ``/config:`` 文件中的 ``[Common]`` 不能可靠覆盖它。必须在启动前
     同时写入此持久配置，且只允许 SOCKS5。
     """
+    路径 = 配置.终端目录 / "config" / "common.ini"
+    return _写入单个MT5持久SOCKS5配置(配置, 路径)
+
+
+def 定位MT5持久代理配置组(终端目录: Path) -> tuple[Path, ...]:
+    """定位本次 Tester 会话可能读取的全部 ``common.ini``。
+
+    Wine 下 ``Program Files/MetaTrader 5 Tester/config`` 和当前用户的
+    ``AppData/Roaming/MetaQuotes/Terminal/<实例>/config`` 会同时存在。
+    仅写前者会留下 Roaming 配置中的 ``ProxyEnable=0``，使一次受控失败
+    无法区分为 SOCKS5 链路问题还是配置覆盖。因此两者必须一致；不修改
+    同一 Wine 前缀内其他安装目录的普通 MT5 配置。
+    """
+    根配置 = 终端目录 / "config" / "common.ini"
+    if not 根配置.is_file():
+        raise ValueError(f"MT5 持久代理配置不存在: {根配置}")
+
+    try:
+        前缀 = 终端目录.parents[1]
+    except IndexError as 异常:
+        raise ValueError(f"无法从 Tester 目录定位 Wine 前缀: {终端目录}") from 异常
+    # 单元测试或非 Wine 调用方只具有 Tester 根配置时，不能猜测其
+    # Roaming 目录；此时仍安全地只写已经显式给出的根配置。
+    if 前缀.name != "drive_c":
+        return (根配置,)
+    Wine前缀 = 前缀.parent
+    Roaming根目录 = Wine前缀 / "drive_c/users"
+    Roaming配置 = sorted(
+        路径
+        for 路径 in Roaming根目录.glob(
+            "*/AppData/Roaming/MetaQuotes/Terminal/*/config/common.ini"
+        )
+        if 路径.is_file() and not 路径.is_symlink()
+    )
+    return tuple([根配置, *Roaming配置])
+
+
+def 写入MT5持久SOCKS5配置组(配置: MT5短窗口探测配置) -> tuple[Path, ...]:
+    """将 Tester 根目录及 Roaming 会话配置统一写为 SOCKS5。"""
+    路径组 = 定位MT5持久代理配置组(配置.终端目录)
+    已写入: list[Path] = []
+    for 路径 in 路径组:
+        已写入.append(_写入单个MT5持久SOCKS5配置(配置, 路径))
+    return tuple(已写入)
+
+
+def _写入单个MT5持久SOCKS5配置(配置: MT5短窗口探测配置, 路径: Path) -> Path:
+    """原子改写一个已经定位的 ``common.ini``。"""
     if 配置.代理类型 != 0 or not 配置.代理地址:
         raise ValueError("MT5 持久代理配置仅允许显式 SOCKS5 地址")
-    路径 = 配置.终端目录 / "config" / "common.ini"
     if not 路径.is_file():
         raise ValueError(f"MT5 持久代理配置不存在: {路径}")
     原始内容 = 路径.read_bytes()

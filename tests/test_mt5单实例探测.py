@@ -55,8 +55,9 @@ def test_探测会保留共享状态前后证据即使报告缺失(tmp_path) -> 
 
     assert 结果.状态 is 实验状态.执行无效
     assert (暂存 / "mt5-探测.ini").is_file()
-    assert (暂存 / "mt5-持久代理.ini").is_file()
-    assert (暂存 / "mt5-持久代理.ini").read_bytes().decode("utf-16").count("ProxyEnable=1") == 1
+    持久代理证据 = list((暂存 / "mt5-持久代理").glob("*.ini"))
+    assert len(持久代理证据) == 1
+    assert 持久代理证据[0].read_bytes().decode("utf-16").count("ProxyEnable=1") == 1
     assert (暂存 / "共享状态-运行前.json").is_file()
     assert (暂存 / "共享状态差异.json").is_file()
     assert (暂存 / "MT5日志证据.txt").read_text(encoding="utf-8") == ""

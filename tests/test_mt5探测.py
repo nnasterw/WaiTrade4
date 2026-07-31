@@ -7,6 +7,7 @@ from wt4.mt5探测 import (
     MT5短窗口探测配置,
     共享状态快照,
     写入MT5持久SOCKS5配置,
+    写入MT5持久SOCKS5配置组,
     生成MT5探测配置,
     核验MT5持久SOCKS5配置,
 )
@@ -130,6 +131,24 @@ def test_持久代理配置拒绝缺少字段(tmp_path) -> None:
         assert "ProxyType" in str(异常)
     else:
         raise AssertionError("应拒绝字段不完整的持久代理配置")
+
+
+def test_持久代理配置组同步Tester与Roaming会话(tmp_path) -> None:
+    配置 = replace(_配置(tmp_path), 终端目录=tmp_path / "prefix/drive_c/Program Files/MetaTrader 5 Tester")
+    Tester配置 = 配置.终端目录 / "config/common.ini"
+    Roaming配置 = (
+        tmp_path / "prefix/drive_c/users/wen/AppData/Roaming/MetaQuotes/Terminal/会话/config/common.ini"
+    )
+    for 路径 in (Tester配置, Roaming配置):
+        路径.parent.mkdir(parents=True, exist_ok=True)
+        路径.write_text(
+            "[Common]\r\nProxyEnable=0\r\nProxyType=0\r\nProxyAddress=127.0.0.1:7897\r\n",
+            encoding="utf-16",
+        )
+
+    assert 写入MT5持久SOCKS5配置组(配置) == (Tester配置, Roaming配置)
+    assert 核验MT5持久SOCKS5配置(Tester配置, "127.0.0.1:7897") == []
+    assert 核验MT5持久SOCKS5配置(Roaming配置, "127.0.0.1:7897") == []
 
 
 def test_共享状态快照能识别新增修改和删除(tmp_path) -> None:
