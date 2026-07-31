@@ -7,6 +7,7 @@ from wt4.运行单实例能力探测 import (
     生成三风险参数副本,
     生成参数文件名,
     核验SOCKS5代理前置,
+    核验离线代理隔离前置,
 )
 from wt4.mt5探测 import MT5短窗口探测配置
 
@@ -76,3 +77,40 @@ def test_代理前置失败时拒绝启动而不允许直连(monkeypatch) -> Non
         assert "拒绝启动 MT5" in str(异常)
     else:
         raise AssertionError("SOCKS5 前置失败时不得启动或降级直连")
+
+
+def test_离线代理隔离只接受明确拒绝连接的非7897环回地址(monkeypatch) -> None:
+    class _拒绝连接:
+        def __enter__(self):
+            raise ConnectionRefusedError("refused")
+
+        def __exit__(self, *_):
+            return None
+
+    monkeypatch.setattr("wt4.运行单实例能力探测.socket.create_connection", lambda *_args, **_kwargs: _拒绝连接())
+
+    assert 核验离线代理隔离前置("127.0.0.1:1") == {
+        "模式": "离线代理隔离", "代理地址": "127.0.0.1:1", "代理监听": False,
+    }
+
+    for 地址 in ("127.0.0.1:7897", "203.0.113.7:1", "::1:1"):
+        try:
+            核验离线代理隔离前置(地址)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("离线隔离不得接受7897或非环回地址")
+
+
+def test_离线代理隔离遇到非拒绝网络异常时拒绝启动(monkeypatch) -> None:
+    def _网络异常(*_args, **_kwargs):
+        raise OSError("network unavailable")
+
+    monkeypatch.setattr("wt4.运行单实例能力探测.socket.create_connection", _网络异常)
+
+    try:
+        核验离线代理隔离前置("127.0.0.1:1")
+    except ValueError as 异常:
+        assert "无法确认拒绝连接" in str(异常)
+    else:
+        raise AssertionError("非明确拒绝连接时不得启动离线隔离实验")

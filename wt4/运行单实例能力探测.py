@@ -6,6 +6,7 @@ from hashlib import sha256
 import json
 from pathlib import Path
 import re
+import socket
 
 from wt4.experiment import 实验输入
 from wt4.mt5单实例探测 import 单实例MT5探测执行器, 通过SOCKS5探测端点
@@ -72,6 +73,35 @@ def 核验SOCKS5代理前置(
     return 探测
 
 
+def 核验离线代理隔离前置(代理地址: str) -> dict[str, object]:
+    """确认离线边界实验只会连接一个不可用的环回 SOCKS5 地址。
+
+    该模式用于验证 MT5 在代理不可用时是否严格失败，而不是验证外部
+    网络可达性。它拒绝非环回地址、默认代理端口和任何已监听地址，
+    因而无法产生外部出口流量，也不允许回退直连。
+    """
+    try:
+        主机, 端口文本 = 代理地址.rsplit(":", 1)
+        端口 = int(端口文本)
+    except (AttributeError, ValueError) as 异常:
+        raise ValueError(f"离线代理地址无效: {代理地址}") from 异常
+    # CLI 地址格式当前只定义为 IPv4 的 ``host:port``。避免把未加方括号的
+    # IPv6 字面量误解析成可用地址，进而放宽隔离实验的网络边界。
+    if 主机 != "127.0.0.1" or not 0 < 端口 < 65536:
+        raise ValueError("离线代理隔离仅允许未监听的 127.0.0.1 地址")
+    if 代理地址 == 默认代理地址:
+        raise ValueError("离线代理隔离不得使用默认7897代理")
+    try:
+        with socket.create_connection((主机, 端口), timeout=0.5):
+            raise ValueError(f"离线代理地址正在监听，拒绝实验: {代理地址}")
+    except ConnectionRefusedError:
+        return {"模式": "离线代理隔离", "代理地址": 代理地址, "代理监听": False}
+    except TimeoutError as 异常:
+        raise ValueError(f"离线代理地址未明确拒绝连接，拒绝实验: {代理地址}") from 异常
+    except OSError as 异常:
+        raise ValueError(f"离线代理地址无法确认拒绝连接，拒绝实验: {代理地址}") from 异常
+
+
 def 创建输入(
     参数哈希: str,
     配置: MT5短窗口探测配置,
@@ -119,6 +149,8 @@ def main() -> None:
     参数.add_argument("--tester", type=Path, default=默认Tester)
     参数.add_argument("--历史参数", type=Path, default=默认历史参数)
     参数.add_argument("--mihomo日志", type=Path, default=默认Mihomo日志)
+    参数.add_argument("--代理地址", default=默认代理地址)
+    参数.add_argument("--离线代理隔离", action="store_true")
     实参 = 参数.parse_args()
 
     if not 实参.wine.is_file() or not 实参.tester.is_dir() or not 实参.wine前缀.is_dir():
@@ -126,7 +158,11 @@ def main() -> None:
     if not (实参.tester / "MQL5/Experts/WaiTrade2/WaiTrade_OB.ex5").is_file():
         raise SystemExit("历史成功 EA 不存在")
     try:
-        代理前置探测 = 核验SOCKS5代理前置()
+        代理前置探测 = (
+            核验离线代理隔离前置(实参.代理地址)
+            if 实参.离线代理隔离
+            else 核验SOCKS5代理前置(实参.代理地址)
+        )
     except ValueError as 异常:
         raise SystemExit(str(异常)) from 异常
 
@@ -149,6 +185,7 @@ def main() -> None:
         杠杆=2000,
         登录账号=实参.登录账号,
         服务器=实参.服务器,
+        代理地址=实参.代理地址,
         参数文件路径=参数副本,
     )
     输入 = 创建输入(参数哈希, 配置, 实参.超时秒数, 实参.试验标识, 代理前置探测)
