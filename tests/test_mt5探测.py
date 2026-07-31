@@ -60,6 +60,21 @@ def test_探测配置拒绝缺失登录账号或服务器(tmp_path) -> None:
             raise AssertionError("应拒绝缺失 MT5 登录信息")
 
 
+def test_探测配置拒绝不存在的显式参数文件(tmp_path) -> None:
+    配置 = replace(_配置(tmp_path), 参数文件路径=tmp_path / "不存在.set")
+    配置.终端目录.mkdir()
+    (配置.终端目录 / "terminal64.exe").write_bytes(b"")
+    暂存目录 = tmp_path / "暂存"
+    暂存目录.mkdir()
+
+    try:
+        生成MT5探测配置(配置, 暂存目录)
+    except ValueError as 异常:
+        assert "参数文件不存在" in str(异常)
+    else:
+        raise AssertionError("应拒绝不存在的显式参数文件")
+
+
 def test_共享状态快照能识别新增修改和删除(tmp_path) -> None:
     受监控 = tmp_path / "Tester"
     受监控.mkdir()

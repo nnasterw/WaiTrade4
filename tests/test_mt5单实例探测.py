@@ -86,3 +86,21 @@ def test_旧成功日志不构成本轮成功证据(tmp_path) -> None:
 
     assert 证据 == ""
     assert 解析MT5生命周期(证据)["完整"] is False
+
+
+def test_探测会封存显式参数文件及其哈希(tmp_path) -> None:
+    配置, wine, 前缀, 暂存 = _配置与目录(tmp_path)
+    参数来源 = tmp_path / "来源.set"
+    参数来源.write_text("InpRiskPercent=3.0", encoding="utf-8")
+    配置 = MT5短窗口探测配置(
+        配置.终端目录, 配置.专家顾问, 配置.参数文件, 配置.品种, 配置.周期,
+        配置.开始日, 配置.结束日, 配置.初始资金, 配置.杠杆, 配置.登录账号, 配置.服务器,
+        参数文件路径=参数来源,
+    )
+
+    执行器 = 单实例MT5探测执行器(配置, wine, 前缀, 5)
+    参数证据 = 执行器._复制参数文件(暂存)
+
+    assert 参数证据 == ("mt5-input/来源.set",)
+    assert (暂存 / 参数证据[0]).read_text(encoding="utf-8") == "InpRiskPercent=3.0"
+    assert 执行器._参数文件哈希(参数证据, 暂存)

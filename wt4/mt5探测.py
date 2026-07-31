@@ -22,6 +22,7 @@ class MT5短窗口探测配置:
     登录账号: str
     服务器: str
     代理地址: str = "127.0.0.1:7897"
+    参数文件路径: Path | None = None
 
 
 def 生成MT5探测配置(配置: MT5短窗口探测配置, 暂存目录: Path) -> Path:
@@ -36,6 +37,8 @@ def 生成MT5探测配置(配置: MT5短窗口探测配置, 暂存目录: Path) 
         raise ValueError("MT5 探测必须显式指定登录账号和服务器")
     if 配置.初始资金 != 300:
         raise ValueError("首期 MT5 探测初始资金必须为 300 美元")
+    if 配置.参数文件路径 is not None and not 配置.参数文件路径.is_file():
+        raise ValueError(f"MT5 探测参数文件不存在: {配置.参数文件路径}")
 
     报告路径 = _mac路径转WineZ盘(暂存目录 / "报告.html")
     内容 = f"""; wt4 单实例能力探测。不可作为策略验收结论。

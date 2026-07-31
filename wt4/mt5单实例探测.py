@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 from pathlib import Path
 from typing import Mapping
 
@@ -56,6 +57,7 @@ class 单实例MT5探测执行器:
         self.超时秒数 = 超时秒数
 
     def 执行(self, 输入: 实验输入, 暂存目录: Path) -> 执行结果:
+        参数证据 = self._复制参数文件(暂存目录)
         运行配置 = 生成MT5探测配置(self.探测配置, 暂存目录)
         受监控目录 = self._受监控目录()
         运行前 = 共享状态快照.创建(受监控目录)
@@ -86,10 +88,15 @@ class 单实例MT5探测执行器:
         日志证据 = self._保留本次日志证据(暂存目录, 运行前日志)
         生命周期 = 解析MT5生命周期((暂存目录 / 日志证据).read_text(encoding="utf-8"))
         工件 = dict(结果.工件)
-        for 名称 in ("mt5-探测.ini", "共享状态-运行前.json", "共享状态差异.json", 日志证据):
+        for 名称 in ("mt5-探测.ini", "共享状态-运行前.json", "共享状态差异.json", 日志证据, *参数证据):
             路径 = 暂存目录 / 名称
             工件[名称] = 隔离MT5执行器._哈希(路径)
-        结果数据 = {**结果.结果, "共享状态差异": 差异, "MT5生命周期": 生命周期}
+        结果数据 = {
+            **结果.结果,
+            "共享状态差异": 差异,
+            "MT5生命周期": 生命周期,
+            "参数输入证据哈希": self._参数文件哈希(参数证据, 暂存目录),
+        }
         if 结果.状态.value == "已归档" and not 生命周期["完整"]:
             return 执行结果(
                 结果.状态.执行无效,
@@ -97,6 +104,23 @@ class 单实例MT5探测执行器:
                 {**结果数据, "原因": "MT5 生命周期证据不完整"},
             )
         return 执行结果(结果.状态, 工件, 结果数据)
+
+    def _复制参数文件(self, 暂存目录: Path) -> tuple[str, ...]:
+        """封存调用方声明的参数输入副本，供后续与 MT5 实际加载路径交叉核验。"""
+        来源 = self.探测配置.参数文件路径
+        if 来源 is None:
+            return ()
+        目标目录 = 暂存目录 / "mt5-input"
+        目标目录.mkdir()
+        目标 = 目标目录 / 来源.name
+        目标.write_bytes(来源.read_bytes())
+        return (目标.relative_to(暂存目录).as_posix(),)
+
+    @staticmethod
+    def _参数文件哈希(参数证据: tuple[str, ...], 暂存目录: Path) -> str | None:
+        if not 参数证据:
+            return None
+        return sha256((暂存目录 / 参数证据[0]).read_bytes()).hexdigest()
 
     def _受监控目录(self) -> list[Path]:
         根目录 = self.探测配置.终端目录
