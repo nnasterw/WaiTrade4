@@ -1,0 +1,68 @@
+from __future__ import annotations
+
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+
+from wt4.mt5报告 import MT5报告错误, 报告期望, 解析MT5报告
+from wt4.验收 import 从MT5报告构造验收输入
+
+
+def _期望() -> 报告期望:
+    return 报告期望("WaiTrade_OB", "BTCUSDm", "M1", "2025.02.01", "2025.03.01", Decimal("300.00"))
+
+
+def _报告(*, 初始资金: str = "300.00", 额外结果: str = "") -> str:
+    return f'''<html><body>
+<table>
+<tr><td>Expert:</td><td>WaiTrade_OB</td></tr><tr><td>Symbol:</td><td>BTCUSDm</td></tr>
+<tr><td>Period:</td><td>M1 (2025.02.01 - 2025.03.01)</td></tr><tr><td>Initial Deposit:</td><td>{初始资金}</td></tr>
+<tr><td>History Quality:</td><td>100% real ticks</td></tr><tr><td>Total Net Profit:</td><td>12.50</td></tr>
+<tr><td>Balance Drawdown Maximal:</td><td>10.00 (3.00%)</td></tr><tr><td>Equity Drawdown Maximal:</td><td>11.00 (3.50%)</td></tr>
+<tr><td>Profit Factor:</td><td>1.25</td></tr><tr><td>Total Trades:</td><td>1</td></tr>{额外结果}
+</table>
+<table><tr><td>Orders</td></tr><tr><td>Open Time</td><td>Order</td><td>Symbol</td><td>Type</td><td>Volume</td><td>Price</td><td>S / L</td><td>T / P</td><td>Time</td><td>State</td><td>Comment</td></tr>
+<tr><td>2025.02.02 13:36:28</td><td>2</td><td>BTCUSDm</td><td>sell</td><td>0.01 / 0.01</td><td>0.00</td><td>99063.02</td><td></td><td>2025.02.02 13:36:28</td><td>filled</td><td>x</td></tr></table></body></html>'''
+
+
+def _写报告(tmp_path: Path, 内容: str) -> Path:
+    路径 = tmp_path / "报告.html"
+    路径.write_bytes(b"\xff\xfe" + 内容.encode("utf-16le"))
+    return 路径
+
+
+def test_严格解析报告及orders明细(tmp_path: Path) -> None:
+    结果 = 解析MT5报告(_写报告(tmp_path, _报告()), _期望())
+
+    assert 结果.净利润 == Decimal("12.50")
+    assert 结果.最大权益回撤比例 == Decimal("0.035")
+    assert 结果.订单[0].订单号 == 2
+    assert 从MT5报告构造验收输入(
+        结果,
+        声明建模方式=4,
+        压力封存净收益=Decimal("1"),
+        极端压力风险通过=True,
+        输入工件完整=True,
+        治理通过=True,
+    ).封存净收益 == Decimal("12.50")
+
+
+def test_拒绝无bom或非utf16le报告(tmp_path: Path) -> None:
+    路径 = tmp_path / "报告.html"
+    路径.write_text(_报告(), encoding="utf-8")
+
+    with pytest.raises(MT5报告错误, match="UTF-16LE"):
+        解析MT5报告(路径, _期望())
+
+
+def test_重复冲突字段会拒绝(tmp_path: Path) -> None:
+    内容 = _报告(额外结果="<tr><td>Total Trades:</td><td>2</td></tr>")
+
+    with pytest.raises(MT5报告错误, match="重复且冲突"):
+        解析MT5报告(_写报告(tmp_path, 内容), _期望())
+
+
+def test_报告身份不匹配会拒绝(tmp_path: Path) -> None:
+    with pytest.raises(MT5报告错误, match="身份"):
+        解析MT5报告(_写报告(tmp_path, _报告(初始资金="301.00")), _期望())

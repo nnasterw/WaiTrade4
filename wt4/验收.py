@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
+from wt4.mt5报告 import MT5报告摘要
 from wt4.风险 import 权益点
 
 
@@ -23,6 +24,32 @@ class 硬门槛结果:
     @property
     def 通过(self) -> bool:
         return not self.失败原因
+
+
+def 从MT5报告构造验收输入(
+    报告: MT5报告摘要,
+    *,
+    声明建模方式: int,
+    压力封存净收益: Decimal,
+    极端压力风险通过: bool,
+    输入工件完整: bool,
+    治理通过: bool,
+) -> 验收输入:
+    """把已严格解析且身份已核验的报告转为验收所需事实。
+
+    ``声明建模方式`` 来自不可变实验输入；报告内的 real ticks 文案只作为
+    独立交叉核验，不能替代实验身份中的 Model=4。
+    """
+    if 报告.建模方式 != "real ticks":
+        raise ValueError("MT5报告并非real ticks")
+    return 验收输入(
+        建模方式=声明建模方式,
+        封存净收益=报告.净利润,
+        压力封存净收益=压力封存净收益,
+        极端压力风险通过=极端压力风险通过,
+        输入工件完整=输入工件完整,
+        治理通过=治理通过,
+    )
 
 
 def 评估硬门槛(输入: 验收输入) -> 硬门槛结果:
