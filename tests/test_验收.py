@@ -17,7 +17,7 @@ def test_压力封存亏损无法被总收益补偿() -> None:
         )
     )
     assert not 结果.通过
-    assert "压力封存样本外为负" in 结果.失败原因
+    assert "压力封存样本外为非正" in 结果.失败原因
 
 
 def test_非真实tick模型不得验收() -> None:

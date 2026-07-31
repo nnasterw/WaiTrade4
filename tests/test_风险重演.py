@@ -26,7 +26,7 @@ from wt4.风险 import 计算当日亏损, 核验风险限额
 
 def test_日损以服务器日初权益计入浮亏并剔除入金() -> None:
     损失 = 计算当日亏损(Decimal("300"), Decimal("285"), Decimal("20"))
-    assert 损失 == Decimal("0")
+    assert 损失 == Decimal("35")
 
 
 def test_单笔和开放风险不能越过各自上限() -> None:

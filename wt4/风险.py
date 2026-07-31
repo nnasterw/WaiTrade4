@@ -51,9 +51,13 @@ def 核验权益曲线(权益曲线: list[权益点], 规则: 风险规则) -> �
 
 
 def 计算当日亏损(日初权益: Decimal, 当前权益: Decimal, 当日出入金净额: Decimal = Decimal("0")) -> Decimal:
+    """计算以日初权益为基准、已剔除当日净入金的权益损失。
+
+    ``当日出入金净额`` 为正表示净入金、为负表示净出金。
+    """
     if 日初权益 <= 0:
         raise ValueError("日初权益必须为正")
-    return max(Decimal("0"), 日初权益 - (当前权益 + 当日出入金净额))
+    return max(Decimal("0"), 日初权益 - (当前权益 - 当日出入金净额))
 
 
 def 核验风险限额(*, 当前权益: Decimal, 日初权益: Decimal, 单笔初始风险: Decimal, 开放初始风险: Decimal, 当日亏损: Decimal, 规则: 风险规则) -> list[str]:

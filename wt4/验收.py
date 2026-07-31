@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
+from wt4.风险 import 权益点
+
 
 @dataclass(frozen=True)
 class 验收输入:
@@ -30,7 +32,7 @@ def 评估硬门槛(输入: 验收输入) -> 硬门槛结果:
     if 输入.封存净收益 <= 0:
         失败原因.append("封存样本外为非正")
     if 输入.压力封存净收益 <= 0:
-        失败原因.append("压力封存样本外为负")
+        失败原因.append("压力封存样本外为非正")
     if not 输入.极端压力风险通过:
         失败原因.append("极端压力突破风险红线")
     if not 输入.输入工件完整:
@@ -38,9 +40,6 @@ def 评估硬门槛(输入: 验收输入) -> 硬门槛结果:
     if not 输入.治理通过:
         失败原因.append("治理审计未通过")
     return 硬门槛结果(失败原因)
-
-from wt4.风险 import 权益点
-
 
 def 核验风险证据(EA权益快照: list[权益点], 独立重演权益: list[权益点], 允许权益偏差: Decimal) -> list[str]:
     if len(EA权益快照) != len(独立重演权益):

@@ -17,12 +17,27 @@ def _文件哈希(路径: Path) -> str:
 def 归档工件(暂存目录: Path, 工件根目录: Path, 实验身份: str, 预期哈希: dict[str, str]) -> Path:
     if not 暂存目录.is_dir():
         raise ValueError(f"暂存目录不存在: {暂存目录}")
+    if not 预期哈希:
+        raise ValueError("预期工件不能为空")
+    预期路径: set[Path] = set()
     for 相对路径, 期望值 in 预期哈希.items():
-        文件 = 暂存目录 / 相对路径
+        路径 = Path(相对路径)
+        if 路径.is_absolute() or ".." in 路径.parts:
+            raise ValueError(f"工件路径必须位于暂存目录内: {相对路径}")
+        文件 = 暂存目录 / 路径
         if not 文件.is_file():
             raise ValueError(f"缺少工件: {相对路径}")
+        if 文件.is_symlink():
+            raise ValueError(f"工件不能是符号链接: {相对路径}")
         if _文件哈希(文件) != 期望值:
             raise ValueError(f"工件哈希不匹配: {相对路径}")
+        预期路径.add(路径)
+
+    实际路径 = {文件.relative_to(暂存目录) for 文件 in 暂存目录.rglob("*") if 文件.is_file()}
+    if 实际路径 != 预期路径:
+        未声明 = sorted(str(路径) for 路径 in 实际路径 - 预期路径)
+        缺失 = sorted(str(路径) for 路径 in 预期路径 - 实际路径)
+        raise ValueError(f"暂存工件与清单不一致: 未声明={未声明}, 缺失={缺失}")
 
     工件根目录.mkdir(parents=True, exist_ok=True)
     目标目录 = 工件根目录 / 实验身份

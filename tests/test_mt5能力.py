@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 from wt4.mt5能力 import 测试实例配置, 校验实例隔离
 
@@ -21,8 +22,8 @@ from wt4.mt5能力 import 能力证据, 判定调度方式
 
 
 def test_目录嵌套同样不是隔离() -> None:
-    甲 = 测试实例配置("甲", __import__('pathlib').Path('/tmp/甲/终端'), __import__('pathlib').Path('/tmp/共享'), __import__('pathlib').Path('/tmp/甲/前缀'), __import__('pathlib').Path('/tmp/甲/输出'))
-    乙 = 测试实例配置("乙", __import__('pathlib').Path('/tmp/乙/终端'), __import__('pathlib').Path('/tmp/共享/Tester'), __import__('pathlib').Path('/tmp/乙/前缀'), __import__('pathlib').Path('/tmp/乙/输出'))
+    甲 = 测试实例配置("甲", Path("/tmp/甲/终端"), Path("/tmp/共享"), Path("/tmp/甲/前缀"), Path("/tmp/甲/输出"))
+    乙 = 测试实例配置("乙", Path("/tmp/乙/终端"), Path("/tmp/共享/Tester"), Path("/tmp/乙/前缀"), Path("/tmp/乙/输出"))
     with pytest.raises(ValueError, match="共享"):
         校验实例隔离([甲, 乙])
 
