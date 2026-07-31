@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from wt4.mt5能力证据 import 能力证据错误, 核验能力证据
+from wt4.mt5能力证据 import 能力证据错误, _读取严格SOCKS5配置, 核验能力证据
 
 
 def test_缺少任一真实结论即拒绝开启并行(tmp_path: Path) -> None:
@@ -17,3 +17,11 @@ def test_空账本不能作为并发能力依据(tmp_path: Path) -> None:
     (tmp_path / "账本.sqlite").touch()
     with pytest.raises(能力证据错误, match="账本缺少"):
         _核验账本(tmp_path, "实验", "已完成")
+
+
+def test_none_代理配置不能成为能力证据(tmp_path: Path) -> None:
+    配置 = tmp_path / "mt5-探测.ini"
+    配置.write_text("ProxyEnable=1\nProxyType=0\nProxyAddress=127.0.0.1:7897\n", encoding="utf-8")
+
+    with pytest.raises(能力证据错误, match="严格 SOCKS5"):
+        _读取严格SOCKS5配置(配置)

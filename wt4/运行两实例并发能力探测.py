@@ -15,7 +15,7 @@ from wt4.mt5并发探测 import 两实例MT5并发探测器
 from wt4.mt5报告 import 报告期望, 解析MT5报告
 from wt4.mt5探测 import MT5短窗口探测配置
 from wt4.mt5能力 import 测试实例配置, 校验实例隔离
-from wt4.运行单实例能力探测 import 计算三风险参数内容
+from wt4.运行单实例能力探测 import 计算三风险参数内容, 核验SOCKS5代理前置
 from wt4.账本 import 追加式账本
 
 
@@ -109,10 +109,15 @@ def main() -> None:
     参数.add_argument("--wine", type=Path, default=默认Wine)
     参数.add_argument("--隔离根目录", type=Path, default=默认隔离根目录)
     参数.add_argument("--历史参数", type=Path, default=默认历史参数)
+    参数.add_argument("--代理地址", default="127.0.0.1:7897")
     实参 = 参数.parse_args()
 
     if not 实参.wine.is_file() or not 实参.历史参数.is_file() or 实参.超时秒数 <= 0:
         raise SystemExit("Wine、历史参数或超时参数无效")
+    try:
+        代理前置探测 = 核验SOCKS5代理前置(实参.代理地址)
+    except ValueError as 异常:
+        raise SystemExit(str(异常)) from 异常
     _确认无既有MT5进程()
     标识 = uuid4().hex[:16]
     运行根目录 = 工作区 / "runtime/MT5并发能力/工件" / 标识
@@ -124,7 +129,7 @@ def main() -> None:
     for 配置 in 实例.values():
         if not (配置.终端目录 / "terminal64.exe").is_file() or not 配置.Wine前缀.is_dir():
             raise SystemExit(f"隔离 MT5 实例不完整: {配置.名称}")
-    账本.追加(标识, "已创建", {"开始日": 实参.开始日, "结束日": 实参.结束日, "实例": ["甲", "乙"]})
+    账本.追加(标识, "已创建", {"开始日": 实参.开始日, "结束日": 实参.结束日, "实例": ["甲", "乙"], "SOCKS5代理前置探测": 代理前置探测})
 
     def 执行函数(名称: str):
         def 执行(暂存目录: Path):
@@ -133,7 +138,7 @@ def main() -> None:
             配置 = MT5短窗口探测配置(
                 终端目录=实例[名称].终端目录, 专家顾问=r"WaiTrade2\WaiTrade_OB", 参数文件=参数名,
                 品种="BTCUSDm", 周期="M1", 开始日=实参.开始日, 结束日=实参.结束日,
-                初始资金=300, 杠杆=2000, 登录账号=实参.登录账号, 服务器=实参.服务器, 参数文件路径=参数路径,
+                初始资金=300, 杠杆=2000, 登录账号=实参.登录账号, 服务器=实参.服务器, 代理地址=实参.代理地址, 参数文件路径=参数路径,
             )
             return 单实例MT5探测执行器(配置, 实参.wine, 实例[名称].Wine前缀, 实参.超时秒数).执行(None, 暂存目录)
         return 执行

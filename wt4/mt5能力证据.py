@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from wt4.mt5单实例探测 import 解析MT5生命周期, 解析MT5实际测试区间
+from wt4.mt5单实例探测 import 解析MT5生命周期, 解析MT5实际测试区间, 核验MT5严格SOCKS5链路
 from wt4.mt5报告 import MT5报告摘要, 报告期望, 解析MT5报告
 from wt4.mt5能力 import 能力证据, 判定调度方式, 校验实例隔离, 测试实例配置
 from wt4.账本 import 追加式账本
@@ -80,6 +80,18 @@ def _报告(路径: Path, 开始日: str, 结束日: str) -> MT5报告摘要:
     return 报告
 
 
+def _读取严格SOCKS5配置(路径: Path) -> dict[str, str]:
+    if not 路径.is_file() or 路径.is_symlink():
+        raise 能力证据错误(f"MT5 探测配置不存在: {路径}")
+    配置 = dict(
+        行.split("=", 1) for 行 in 路径.read_text(encoding="utf-8").splitlines()
+        if "=" in 行 and not 行.lstrip().startswith(";")
+    )
+    if 配置.get("ProxyEnable") != "1" or 配置.get("ProxyType") != "1" or not 配置.get("ProxyAddress"):
+        raise 能力证据错误(f"MT5 探测配置不符合严格 SOCKS5 要求: {路径}")
+    return 配置
+
+
 def _确认归档报告(结论: dict[str, Any], 名称: str, 根目录: Path, 开始日: str, 结束日: str) -> MT5报告摘要:
     实验 = 结论.get(名称)
     if not isinstance(实验, dict) or not isinstance(实验.get("工件目录"), str):
@@ -90,6 +102,10 @@ def _确认归档报告(结论: dict[str, Any], 名称: str, 根目录: Path, �
     验收 = _读取结论(目录 / "验收结果.json")
     if 验收.get("MT5返回码") != 0 or 验收.get("MT5生命周期", {}).get("完整") is not True:
         raise 能力证据错误(f"{名称} MT5 生命周期不完整")
+    配置 = _读取严格SOCKS5配置(目录 / "mt5-探测.ini")
+    日志 = (目录 / "MT5日志证据.txt").read_text(encoding="utf-8")
+    if 核验MT5严格SOCKS5链路(日志, 配置["ProxyAddress"]):
+        raise 能力证据错误(f"{名称} 严格 SOCKS5 链路证据不完整")
     if tuple(验收.get("MT5实际测试区间", ())) != (开始日, 结束日):
         raise 能力证据错误(f"{名称}实际回测区间不符")
     return _报告(目录 / "报告.html", 开始日, 结束日)
@@ -147,7 +163,12 @@ def _核验并发(结论: dict[str, Any], 根目录: Path) -> bool:
     基准: tuple[object, ...] | None = None
     for 阶段 in ("串行", "并行"):
         for 名称 in ("甲", "乙"):
-            报告 = _报告(根目录 / 阶段 / 名称 / "报告.html", "2025.03.02", "2025.03.03")
+            目录 = 根目录 / 阶段 / 名称
+            配置 = _读取严格SOCKS5配置(目录 / "mt5-探测.ini")
+            日志 = (目录 / "MT5日志证据.txt").read_text(encoding="utf-8")
+            if 核验MT5严格SOCKS5链路(日志, 配置["ProxyAddress"]):
+                raise 能力证据错误(f"并发{阶段}{名称}严格 SOCKS5 链路证据不完整")
+            报告 = _报告(目录 / "报告.html", "2025.03.02", "2025.03.03")
             if 基准 is None:
                 基准 = 报告.成交
             elif 报告.成交 != 基准:
@@ -172,7 +193,11 @@ def _核验中断(结论: dict[str, Any], 根目录: Path) -> bool:
         文件 = 根目录 / 相对路径
         if not isinstance(期望哈希, str) or not 文件.is_file() or 文件.is_symlink() or sha256(文件.read_bytes()).hexdigest() != 期望哈希:
             raise 能力证据错误(f"中断工件哈希不匹配: {相对路径}")
-    日志 = (根目录 / "乙/MT5日志证据.txt").read_text(encoding="utf-8")
+    乙目录 = 根目录 / "乙"
+    日志 = (乙目录 / "MT5日志证据.txt").read_text(encoding="utf-8")
+    配置 = _读取严格SOCKS5配置(乙目录 / "mt5-探测.ini")
+    if 核验MT5严格SOCKS5链路(日志, 配置["ProxyAddress"]):
+        raise 能力证据错误("中断实验乙严格 SOCKS5 链路证据不完整")
     if not 解析MT5生命周期(日志).get("完整") or 解析MT5实际测试区间(日志) != ("2025.03.02", "2025.03.03"):
         raise 能力证据错误("中断实验乙生命周期或区间不完整")
     _报告(根目录 / "乙/报告.html", "2025.03.02", "2025.03.03")

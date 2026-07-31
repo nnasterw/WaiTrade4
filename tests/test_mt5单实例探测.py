@@ -10,6 +10,7 @@ from wt4.mt5单实例探测 import (
     解析MT5实际测试区间,
     解析MT5代理同步诊断,
     解析MT5生命周期,
+    核验MT5严格SOCKS5链路,
     解析MT5连接端点,
     批量通过SOCKS5探测端点,
     通过SOCKS5探测TLS端点,
@@ -103,6 +104,19 @@ Terminal exit with code 0
     assert 解析MT5生命周期(完整日志)["完整"] is True
     assert 解析MT5生命周期('Tester last test passed with result "successfully finished"')["完整"] is False
     assert 解析MT5生命周期("Terminal cannot load config Z:\\bad.ini")["失败标记"] == ["terminal cannot load config"]
+
+
+def test_严格_socks5_链路必须匹配代理并包含授权和同步() -> None:
+    完整日志 = """
+DG\t0\t20:23:44.439\tProxy\tconnecting through SOCKS5 proxy 127.0.0.1:7897
+MO\t0\t20:23:45.000\tNetwork\tauthorized on Exness-MT5Trial5 through Access Point #5
+MO\t0\t20:23:46.000\tNetwork\tterminal synchronized with Exness Technologies Ltd
+"""
+
+    assert 核验MT5严格SOCKS5链路(完整日志, "127.0.0.1:7897") == []
+    assert "不匹配" in 核验MT5严格SOCKS5链路(完整日志, "127.0.0.1:1")[0]
+    缺少授权 = 核验MT5严格SOCKS5链路("DG\t0\t20:23:44.439\tProxy\tconnecting through SOCKS5 proxy 127.0.0.1:7897", "127.0.0.1:7897")
+    assert any("授权" in 原因 for 原因 in 缺少授权)
 
 
 def test_生命周期接受_mt5_制表符分隔日志并标记历史数据失败() -> None:

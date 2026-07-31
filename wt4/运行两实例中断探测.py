@@ -16,7 +16,7 @@ from wt4.mt5报告 import 报告期望, 解析MT5报告
 from wt4.mt5中断探测 import 两实例中断探测器
 from wt4.mt5能力 import 校验实例隔离
 from wt4.运行两实例并发能力探测 import _实例, _确认无既有MT5进程
-from wt4.运行单实例能力探测 import 计算三风险参数内容
+from wt4.运行单实例能力探测 import 计算三风险参数内容, 核验SOCKS5代理前置
 from wt4.账本 import 追加式账本
 
 
@@ -29,7 +29,7 @@ from wt4.账本 import 追加式账本
 
 
 def _准备实例运行(
-    名称: str, 开始日: str, 结束日: str, 标识: str, 根目录: Path, 实例, 历史参数: Path, wine: Path, 账号: str, 服务器: str, 超时秒数: int,
+    名称: str, 开始日: str, 结束日: str, 标识: str, 根目录: Path, 实例, 历史参数: Path, wine: Path, 账号: str, 服务器: str, 超时秒数: int, 代理地址: str,
 ) -> tuple[MT5后台进程, Path, MT5短窗口探测配置, dict[str, bytes]]:
     暂存 = 根目录 / 名称
     暂存.mkdir()
@@ -39,7 +39,7 @@ def _准备实例运行(
     参数路径.write_bytes(内容)
     配置 = MT5短窗口探测配置(
         实例.终端目录, r"WaiTrade2\WaiTrade_OB", 参数名, "BTCUSDm", "M1",
-        开始日, 结束日, 300, 2000, 账号, 服务器, 参数文件路径=参数路径,
+        开始日, 结束日, 300, 2000, 账号, 服务器, 代理地址=代理地址, 参数文件路径=参数路径,
     )
     # 复用单实例执行器的实际 Parameter 目录规则，且唯一命名、拒绝覆盖。
     执行器 = 单实例MT5探测执行器(配置, wine, 实例.Wine前缀, 超时秒数)
@@ -72,9 +72,14 @@ def main() -> None:
     参数.add_argument("--wine", type=Path, default=默认Wine)
     参数.add_argument("--隔离根目录", type=Path, default=默认隔离根目录)
     参数.add_argument("--历史参数", type=Path, default=默认历史参数)
+    参数.add_argument("--代理地址", default="127.0.0.1:7897")
     实参 = 参数.parse_args()
     if not 实参.wine.is_file() or not 实参.历史参数.is_file():
         raise SystemExit("Wine 或历史参数无效")
+    try:
+        代理前置探测 = 核验SOCKS5代理前置(实参.代理地址)
+    except ValueError as 异常:
+        raise SystemExit(str(异常)) from 异常
     _确认无既有MT5进程()
     标识 = uuid4().hex[:16]
     根目录 = 工作区 / "runtime/MT5并发能力/中断工件" / 标识
@@ -84,12 +89,12 @@ def main() -> None:
     账本 = 追加式账本(根目录 / "账本.sqlite")
     账本.追加(标识, "已创建", {
         "甲区间": [实参.甲开始日, 实参.甲结束日], "乙区间": [实参.乙开始日, 实参.乙结束日],
-        "启动宽限秒": 实参.启动宽限秒, "第二实例启动间隔秒": 实参.第二实例启动间隔秒, "乙超时秒": 实参.乙超时秒,
+        "启动宽限秒": 实参.启动宽限秒, "第二实例启动间隔秒": 实参.第二实例启动间隔秒, "乙超时秒": 实参.乙超时秒, "SOCKS5代理前置探测": 代理前置探测,
     })
     启动记录: dict[str, tuple[Path, MT5短窗口探测配置, dict[str, bytes]]] = {}
 
     def 启动(名称: str, 开始日: str, 结束日: str) -> MT5后台进程:
-        进程, 暂存, 配置, 日志快照 = _准备实例运行(名称, 开始日, 结束日, 标识, 根目录, 实例[名称], 实参.历史参数, 实参.wine, 实参.登录账号, 实参.服务器, 实参.乙超时秒)
+        进程, 暂存, 配置, 日志快照 = _准备实例运行(名称, 开始日, 结束日, 标识, 根目录, 实例[名称], 实参.历史参数, 实参.wine, 实参.登录账号, 实参.服务器, 实参.乙超时秒, 实参.代理地址)
         启动记录[名称] = (暂存, 配置, 日志快照)
         return 进程
 
