@@ -66,6 +66,7 @@ class 单实例MT5探测执行器:
     def _受监控目录(self) -> list[Path]:
         根目录 = self.探测配置.终端目录
         return [
+            根目录 / "logs",
             根目录 / "Tester" / "cache",
             根目录 / "Tester" / "logs",
             根目录 / "Tester" / "Agent-127.0.0.1-3000" / "logs",

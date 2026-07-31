@@ -15,7 +15,7 @@ def _输入() -> 实验输入:
 
 def test_探测会保留共享状态前后证据即使报告缺失(tmp_path) -> None:
     终端 = tmp_path / "MetaTrader 5 Tester"
-    for 相对目录 in ("Tester/cache", "Tester/logs", "Tester/Agent-127.0.0.1-3000/logs", "reports"):
+    for 相对目录 in ("logs", "Tester/cache", "Tester/logs", "Tester/Agent-127.0.0.1-3000/logs", "reports"):
         (终端 / 相对目录).mkdir(parents=True)
     (终端 / "terminal64.exe").write_bytes(b"")
     wine = tmp_path / "wine"
@@ -23,7 +23,10 @@ def test_探测会保留共享状态前后证据即使报告缺失(tmp_path) -> 
     wine.chmod(0o755)
     前缀 = tmp_path / "prefix"
     前缀.mkdir()
-    配置 = MT5短窗口探测配置(终端, r"WaiTrade\WaiTrade_OB", "WaiTrade_OB.set", "BTCUSDm", "M5", "2026.05.01", "2026.05.02", 300, 2000)
+    配置 = MT5短窗口探测配置(
+        终端, r"WaiTrade\WaiTrade_OB", "WaiTrade_OB.set", "BTCUSDm", "M5",
+        "2026.05.01", "2026.05.02", 300, 2000, "277656700", "Exness-MT5Trial5",
+    )
     暂存 = tmp_path / "暂存"
     暂存.mkdir()
 
