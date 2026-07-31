@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import date
 from hashlib import sha256
 import json
 from typing import Any
@@ -43,11 +44,27 @@ def 核验正式策略验收批次(批次: tuple[实验输入, ...], 窗口: 验
     if 实际周期 != 期望周期:
         raise ValueError("正式策略验收必须覆盖四个连续半年周期")
     for 输入 in 批次:
-        if not 输入.正式策略验收:
-            raise ValueError("正式策略验收批次必须显式标记为正式策略验收")
-        if 输入.交易品种 != "BTCUSDm" or 输入.合约规格 != "BTCUSDm":
-            raise ValueError("正式策略验收当前仅允许 BTCUSDm")
-        if 输入.初始资金 != "300":
-            raise ValueError("正式策略验收初始资金必须为 300 美元")
-        if 输入.建模方式 != 4:
-            raise ValueError("正式策略验收必须使用 Model 4 / Real Ticks")
+        核验正式策略验收单期(输入)
+
+
+def 核验正式策略验收单期(输入: 实验输入) -> None:
+    """校验所有正式验收共有的不可降低边界。
+
+    四期连续性由批次入口额外校验；这里必须由单期编排入口调用，避免
+    调用者绕开批次函数后把其它品种、资金或日期格式伪装为正式验收。
+    """
+    if not 输入.正式策略验收:
+        raise ValueError("正式策略验收必须显式标记为正式策略验收")
+    if 输入.交易品种 != "BTCUSDm" or 输入.合约规格 != "BTCUSDm":
+        raise ValueError("正式策略验收当前仅允许 BTCUSDm")
+    if 输入.初始资金 != "300":
+        raise ValueError("正式策略验收初始资金必须为 300 美元")
+    if 输入.建模方式 != 4:
+        raise ValueError("正式策略验收必须使用 Model 4 / Real Ticks")
+    try:
+        开始日 = date.fromisoformat(输入.起始日)
+        结束日 = date.fromisoformat(输入.结束日)
+    except ValueError as 异常:
+        raise ValueError("正式策略验收日期必须使用ISO格式") from 异常
+    if 开始日 >= 结束日:
+        raise ValueError("正式策略验收日期区间无效")

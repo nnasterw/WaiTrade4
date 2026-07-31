@@ -4,7 +4,7 @@ from datetime import date
 
 import pytest
 
-from wt4.experiment import 实验输入, 核验正式策略验收批次
+from wt4.experiment import 实验输入, 核验正式策略验收单期, 核验正式策略验收批次
 from wt4.窗口 import 生成验收窗口
 
 
@@ -74,3 +74,21 @@ def test_正式策略验收批次拒绝非BTC_非300或缺失周期() -> None:
 
     with pytest.raises(ValueError, match="四个连续半年周期"):
         核验正式策略验收批次(tuple(批次[:3]), 窗口)
+
+
+@pytest.mark.parametrize(
+    ("覆盖", "错误"),
+    [
+        ({"交易品种": "ETHUSDm"}, "BTC"),
+        ({"合约规格": "ETHUSDm"}, "BTC"),
+        ({"初始资金": "1000"}, "300"),
+        ({"建模方式": 1}, "Model 4"),
+        ({"起始日": "2024.7.1"}, "ISO"),
+        ({"起始日": "2024-12-31", "结束日": "2024-07-01"}, "区间"),
+    ],
+)
+def test_正式策略验收单期拒绝降低固定边界(覆盖: dict[str, object], 错误: str) -> None:
+    默认 = {"开始日": "2024-07-01", "结束日": "2024-12-31"}
+    默认.update(覆盖)
+    with pytest.raises(ValueError, match=错误):
+        核验正式策略验收单期(_正式输入(**默认, 分区="单期"))

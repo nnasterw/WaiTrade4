@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from wt4.mt5报告 import MT5报告错误, 报告期望, 解析MT5报告
-from wt4.正式验收工件 import 完成正式验收风险桥接
+from wt4.正式验收工件 import 完成正式验收风险桥接, 正式验收工件错误, 读取开仓风险工件, 读取逐tick权益工件
 from wt4.风险 import 重演MT5已实现余额, 重演MT5成交风险
 from wt4.验收 import 从MT5报告构造验收输入
 
@@ -154,3 +154,34 @@ def test_正式验收风险桥接缺少报告开仓证据时保持_fail_closed(t
     assert not 输入.权益风险证据完整
     assert 输入.风险限额重演 is None
     assert "没有开仓风险证据" in 风险限额.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("时间", ["2025.2.01 00:00:00", "2025.02.30 00:00:00", "任意时间"])
+def test_正式验收权益工件拒绝非规范时间格式(tmp_path: Path, 时间: str) -> None:
+    路径 = tmp_path / "逐tick权益.json"
+    路径.write_text(f'{{"权益点":[{{"时间":"{时间}","余额":"300","权益":"300"}}]}}', encoding="utf-8")
+
+    with pytest.raises(正式验收工件错误, match="YYYY.MM.DD HH:MM:SS"):
+        读取逐tick权益工件(路径)
+
+
+def test_正式验收权益工件按真实时间而非字符串排序(tmp_path: Path) -> None:
+    路径 = tmp_path / "逐tick权益.json"
+    路径.write_text(
+        '{"权益点":[{"时间":"2025.02.10 00:00:00","余额":"300","权益":"300"},'
+        '{"时间":"2025.02.02 00:00:00","余额":"300","权益":"300"}]}', encoding="utf-8"
+    )
+
+    with pytest.raises(正式验收工件错误, match="严格递增"):
+        读取逐tick权益工件(路径)
+
+
+def test_正式验收开仓风险工件拒绝非法时间(tmp_path: Path) -> None:
+    路径 = tmp_path / "成交风险.json"
+    路径.write_text(
+        '{"开仓风险":[{"成交号":2,"时间":"任意时间","当前权益":"300",'
+        '"单笔初始风险":"8","开放初始风险":"8"}]}', encoding="utf-8"
+    )
+
+    with pytest.raises(正式验收工件错误, match="YYYY.MM.DD HH:MM:SS"):
+        读取开仓风险工件(路径)

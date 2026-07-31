@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 import json
@@ -41,6 +42,19 @@ def _列表(内容: object, 名称: str) -> list[dict[str, Any]]:
     return 内容
 
 
+def _时间(value: object, 名称: str) -> datetime:
+    if not isinstance(value, str):
+        raise 正式验收工件错误(f"{名称}必须为YYYY.MM.DD HH:MM:SS")
+    try:
+        结果 = datetime.strptime(value, "%Y.%m.%d %H:%M:%S")
+    except ValueError as 异常:
+        raise 正式验收工件错误(f"{名称}必须为YYYY.MM.DD HH:MM:SS") from 异常
+    # strptime 会接受非零填充格式；必须拒绝，否则字典序和时间序可能不同。
+    if 结果.strftime("%Y.%m.%d %H:%M:%S") != value:
+        raise 正式验收工件错误(f"{名称}必须为YYYY.MM.DD HH:MM:SS")
+    return 结果
+
+
 def 读取逐tick权益工件(路径: Path) -> list[权益点]:
     try:
         内容 = json.loads(路径.read_text(encoding="utf-8"))
@@ -50,16 +64,17 @@ def 读取逐tick权益工件(路径: Path) -> list[权益点]:
     if not 项目:
         raise 正式验收工件错误("逐tick权益工件不能为空")
     结果: list[权益点] = []
-    上一时间 = ""
+    上一时间: datetime | None = None
     for 项 in 项目:
         时间 = 项.get("时间")
-        if not isinstance(时间, str) or not 时间 or 时间 <= 上一时间:
+        解析时间 = _时间(时间, "逐tick权益时间")
+        if 上一时间 is not None and 解析时间 <= 上一时间:
             raise 正式验收工件错误("逐tick权益时间必须严格递增")
         余额, 权益 = _小数(项.get("余额"), "余额"), _小数(项.get("权益"), "权益")
         if 余额 <= 0 or 权益 <= 0:
             raise 正式验收工件错误("逐tick权益和余额必须为正")
         结果.append(权益点(时间, 余额, 权益))
-        上一时间 = 时间
+        上一时间 = 解析时间
     return 结果
 
 
@@ -72,8 +87,9 @@ def 读取开仓风险工件(路径: Path) -> list[开仓风险证据]:
     结果: list[开仓风险证据] = []
     for 项 in 项目:
         成交号, 时间 = 项.get("成交号"), 项.get("时间")
-        if not isinstance(成交号, int) or isinstance(成交号, bool) or 成交号 <= 0 or not isinstance(时间, str) or not 时间:
+        if not isinstance(成交号, int) or isinstance(成交号, bool) or 成交号 <= 0:
             raise 正式验收工件错误("开仓风险成交号或时间无效")
+        _时间(时间, "开仓风险时间")
         当前权益 = _小数(项.get("当前权益"), "当前权益")
         单笔初始风险 = _小数(项.get("单笔初始风险"), "单笔初始风险")
         开放初始风险 = _小数(项.get("开放初始风险"), "开放初始风险")
@@ -122,6 +138,10 @@ def 构造正式验收风险工件(
     )
     风险限额内容 = {
         "来源": "由报告、逐tick权益与独立开仓风险工件重演",
+        "源工件哈希": {
+            "逐tick权益": sha256(逐tick权益路径.read_bytes()).hexdigest(),
+            "开仓风险": sha256(成交风险路径.read_bytes()).hexdigest(),
+        },
         "最大单笔初始风险比例": str(风险重演.最大单笔初始风险比例) if 风险重演 else None,
         "最大开放初始风险比例": str(风险重演.最大开放初始风险比例) if 风险重演 else None,
         "失败原因": list(风险重演.失败原因) if 风险重演 else ["没有开仓风险证据"],

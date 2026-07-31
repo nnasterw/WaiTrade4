@@ -11,11 +11,13 @@ from collections import deque
 from threading import Condition, Thread
 from typing import Protocol
 
-from wt4.experiment import 实验输入, 核验正式策略验收批次
+from wt4.experiment import 实验输入, 核验正式策略验收单期, 核验正式策略验收批次
 from wt4.工件 import 归档工件
 from wt4.账本 import 追加式账本
 from wt4.评分 import 评分原料
+from wt4.正式验收工件 import 读取开仓风险工件, 读取逐tick权益工件
 from wt4.验收 import 验收输入, 评估硬门槛
+from wt4.风险 import 重演逐tick日内权益风险, 重演风险限额
 from wt4.窗口 import 生成验收窗口
 
 
@@ -101,7 +103,13 @@ class 中央实验编排器:
         return self.回收未终态实验(实验身份, "后台宿主提前退出，已受限回收本轮进程组")
 
     def 运行(self, 输入: 实验输入, 执行器: MT5执行器, *, 允许已排队: bool = False) -> 编排结果:
-        身份 = 输入.身份
+        # 在执行器获得对象之前冻结规范内容。frozen dataclass 不能冻结其中的
+        # dict/list；执行器即使改写其副本，也不能改变身份或已创建账本证据。
+        输入快照 = json.loads(输入.规范内容())
+        冻结输入 = 实验输入(**输入快照)
+        身份 = 冻结输入.身份
+        if 冻结输入.正式策略验收:
+            核验正式策略验收单期(冻结输入)
         已有事件 = self.账本.事件(身份)
         if 已有事件 and not (允许已排队 and [事件.类型 for 事件 in 已有事件] == [实验状态.已排队]):
             raise ValueError(f"实验身份已存在，拒绝重跑: {身份}")
@@ -110,10 +118,10 @@ class 中央实验编排器:
             raise ValueError(f"实验目录已存在，拒绝覆盖: {身份}")
 
         暂存目录.mkdir(parents=True)
-        self.账本.追加(身份, 实验状态.已创建, {"输入": json.loads(输入.规范内容())})
+        self.账本.追加(身份, 实验状态.已创建, {"输入": 输入快照})
         try:
-            执行结果 = 执行器.执行(输入, 暂存目录)
-            执行结果 = self._核验正式验收结果(输入, 执行结果, 暂存目录)
+            执行结果 = 执行器.执行(冻结输入, 暂存目录)
+            执行结果 = self._核验正式验收结果(冻结输入, 执行结果, 暂存目录)
             if 执行结果.状态 not in {
                 实验状态.已归档,
                 实验状态.有效失败,
@@ -201,6 +209,7 @@ def _核验封存风险证据工件(结果: 执行结果, 暂存目录: Path) ->
     名称 = 结果.风险证据工件
     if 名称 is None or len(名称) != 3 or len(set(名称)) != 3:
         return False
+    内容组: dict[str, tuple[Path, dict[str, object]]] = {}
     for 相对路径 in 名称:
         路径 = Path(相对路径)
         文件 = 暂存目录 / 路径
@@ -218,6 +227,40 @@ def _核验封存风险证据工件(结果: 执行结果, 暂存目录: Path) ->
             return False
         if not isinstance(内容, dict) or not 内容:
             return False
+        内容组[相对路径] = (文件, 内容)
+
+    权益项 = [(路径, 内容) for 路径, 内容 in 内容组.values() if "权益点" in 内容]
+    风险项 = [(路径, 内容) for 路径, 内容 in 内容组.values() if "开仓风险" in 内容]
+    限额项 = [(路径, 内容) for 路径, 内容 in 内容组.values() if "源工件哈希" in 内容]
+    if len(权益项) != 1 or len(风险项) != 1 or len(限额项) != 1:
+        return False
+    权益路径, _ = 权益项[0]
+    风险路径, _ = 风险项[0]
+    _, 限额内容 = 限额项[0]
+    if 限额内容.get("来源") != "由报告、逐tick权益与独立开仓风险工件重演":
+        return False
+    源哈希 = 限额内容.get("源工件哈希")
+    if not isinstance(源哈希, dict) or 源哈希 != {
+        "逐tick权益": sha256(权益路径.read_bytes()).hexdigest(),
+        "开仓风险": sha256(风险路径.read_bytes()).hexdigest(),
+    }:
+        return False
+    try:
+        权益 = 读取逐tick权益工件(权益路径)
+        开仓风险 = 读取开仓风险工件(风险路径)
+        逐tick重演 = 重演逐tick日内权益风险(权益)
+        风险重演 = 重演风险限额([项.快照 for 项 in 开仓风险])
+    except (ValueError, ArithmeticError):
+        return False
+    验收 = 结果.验收输入
+    if 验收 is None or 验收.逐tick日内权益风险 != 逐tick重演 or 验收.风险限额重演 != 风险重演:
+        return False
+    if (
+        限额内容.get("最大单笔初始风险比例") != str(风险重演.最大单笔初始风险比例)
+        or 限额内容.get("最大开放初始风险比例") != str(风险重演.最大开放初始风险比例)
+        or 限额内容.get("失败原因") != list(风险重演.失败原因)
+    ):
+        return False
     return True
 
 
@@ -286,14 +329,18 @@ class 中央单实例后台队列:
         self._工作线程: Thread | None = None
 
     def 提交(self, 输入: 实验输入, 执行器: MT5执行器) -> str:
-        身份 = 输入.身份
+        # 排队期间调用方仍可能持有并改写嵌套参数；必须在写入排队账本、
+        # 生成队列键和保存任务前使用同一份冻结快照。
+        输入快照 = json.loads(输入.规范内容())
+        冻结输入 = 实验输入(**输入快照)
+        身份 = 冻结输入.身份
         with self._条件:
             if 身份 in self._任务 or self._编排器.账本.事件(身份):
                 raise ValueError(f"实验身份已存在，拒绝重复提交: {身份}")
             if (self._编排器.暂存根目录 / 身份).exists() or (self._编排器.工件根目录 / 身份).exists():
                 raise ValueError(f"实验目录已存在，拒绝覆盖: {身份}")
-            self._编排器.账本.追加(身份, 实验状态.已排队, {"输入": json.loads(输入.规范内容())})
-            self._任务[身份] = _后台任务(输入, 执行器)
+            self._编排器.账本.追加(身份, 实验状态.已排队, {"输入": 输入快照})
+            self._任务[身份] = _后台任务(冻结输入, 执行器)
             self._待执行.append(身份)
             if self._工作线程 is None or not self._工作线程.is_alive():
                 self._工作线程 = Thread(target=self._持续执行, name="wt4-中央单实例队列", daemon=True)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from hashlib import sha256
@@ -83,6 +84,13 @@ class _失败执行器:
         return 执行结果(实验状态.数据无效, {}, {"原因": "缺失真实 ticks"})
 
 
+class _篡改输入执行器:
+    def 执行(self, 输入: 实验输入, 暂存目录: Path) -> 执行结果:
+        输入.参数["风险"] = 99
+        输入.参数["嵌套"]["值"].append(99)
+        return 执行结果(实验状态.数据无效, {}, {"原因": "用于验证输入快照"})
+
+
 class _正式成功执行器:
     def __init__(self, *, 失败: bool = False, 缺少风险证据: bool = False) -> None:
         self.失败 = 失败
@@ -96,9 +104,28 @@ class _正式成功执行器:
         权益 = 暂存目录 / "逐tick权益.json"
         成交风险 = 暂存目录 / "成交风险.json"
         风险 = 暂存目录 / "风险限额.json"
-        权益.write_text('{"来源": "独立逐tick重演"}', encoding="utf-8")
-        成交风险.write_text('{"来源": "独立成交风险重演"}', encoding="utf-8")
-        风险.write_text('{"来源": "独立风险限额重演"}', encoding="utf-8")
+        权益.write_text(
+            '{"权益点":[{"时间":"2026.01.01 00:00:00","余额":"300","权益":"300"}]}',
+            encoding="utf-8",
+        )
+        成交风险.write_text(
+            '{"开仓风险":[{"成交号":2,"时间":"2026.01.01 00:00:00","当前权益":"300",'
+            '"单笔初始风险":"1","开放初始风险":"1"}]}',
+            encoding="utf-8",
+        )
+        风险重演 = 重演风险限额([
+            风险限额快照("2026.01.01 00:00:00", Decimal("300"), Decimal("1"), Decimal("1")),
+        ])
+        风险.write_text(json.dumps({
+            "来源": "由报告、逐tick权益与独立开仓风险工件重演",
+            "源工件哈希": {
+                "逐tick权益": sha256(权益.read_bytes()).hexdigest(),
+                "开仓风险": sha256(成交风险.read_bytes()).hexdigest(),
+            },
+            "最大单笔初始风险比例": str(风险重演.最大单笔初始风险比例),
+            "最大开放初始风险比例": str(风险重演.最大开放初始风险比例),
+            "失败原因": list(风险重演.失败原因),
+        }, ensure_ascii=False), encoding="utf-8")
         验收 = _验收输入()
         if self.失败:
             验收 = 验收.__class__(
@@ -109,6 +136,24 @@ class _正式成功执行器:
             实验状态.已归档, 工件, {}, 验收输入=验收, 评分原料=_评分原料(),
             风险证据工件=None if self.缺少风险证据 else (权益.name, 成交风险.name, 风险.name),
         )
+
+
+class _占位风险工件执行器(_正式成功执行器):
+    """模拟旧实现：任意非空 JSON 被伪装成正式风险证据。"""
+
+    def 执行(self, 输入: 实验输入, 暂存目录: Path) -> 执行结果:
+        结果 = super().执行(输入, 暂存目录)
+        占位 = {
+            "逐tick权益.json": {"来源": "占位"},
+            "成交风险.json": {"来源": "占位"},
+            "风险限额.json": {"来源": "占位"},
+        }
+        工件 = dict(结果.工件)
+        for 名称, 内容 in 占位.items():
+            路径 = 暂存目录 / 名称
+            路径.write_text(json.dumps(内容, ensure_ascii=False), encoding="utf-8")
+            工件[名称] = sha256(路径.read_bytes()).hexdigest()
+        return replace(结果, 工件=工件)
 
 
 def test_成功实验原子归档并写入完整事件链(tmp_path) -> None:
@@ -136,6 +181,18 @@ def test_无效实验保留失败分类且拒绝相同身份重跑(tmp_path) -> 
     assert [事件.类型 for 事件 in 账本.事件(输入.身份)] == ["已创建", "数据无效"]
     with pytest.raises(ValueError, match="拒绝重跑"):
         编排器.运行(输入, _失败执行器())
+
+
+def test_执行器篡改可变参数不会改写实验身份或已创建账本输入(tmp_path) -> None:
+    账本 = 追加式账本(tmp_path / "账本.sqlite")
+    编排器 = 中央实验编排器(账本, tmp_path / "暂存", tmp_path / "工件")
+    输入 = _输入({"风险": 3, "嵌套": {"值": [1]}})
+
+    结果 = 编排器.运行(输入, _篡改输入执行器())
+
+    assert 结果.实验身份 == 输入.身份
+    assert 账本.事件(输入.身份)[0].内容["输入"]["参数"] == {"风险": 3, "嵌套": {"值": [1]}}
+    assert 输入.参数 == {"风险": 3, "嵌套": {"值": [1]}}
 
 
 def test_启动恢复会将仅已创建且无终态的实验标为执行无效(tmp_path) -> None:
@@ -272,6 +329,27 @@ def test_后台队列拒绝同一实验身份的重复提交(tmp_path) -> None:
     assert 队列.等待(输入.身份, 5).状态 is 后台任务状态.已完成
 
 
+def test_后台排队后篡改调用者输入不会分裂实验身份或账本(tmp_path) -> None:
+    账本 = 追加式账本(tmp_path / "账本.sqlite")
+    编排器 = 中央实验编排器(账本, tmp_path / "暂存", tmp_path / "工件")
+    队列 = 中央单实例后台队列(编排器)
+    放行 = Event()
+    占用 = 队列.提交(_输入({"任务": "占用"}), _留痕执行器("占用", [], 放行))
+    输入 = _输入({"风险": 3, "嵌套": {"值": [1]}})
+
+    身份 = 队列.提交(输入, _成功执行器())
+    输入.参数["风险"] = 99
+    输入.参数["嵌套"]["值"].append(99)
+    放行.set()
+
+    assert 队列.等待(占用, 5).实验状态 is 实验状态.已归档
+    快照 = 队列.等待(身份, 5)
+    assert 快照.实验状态 is 实验状态.已归档
+    assert [事件.类型 for 事件 in 账本.事件(身份)] == ["已排队", "已创建", "已归档"]
+    assert 账本.事件(身份)[0].内容["输入"]["参数"] == {"风险": 3, "嵌套": {"值": [1]}}
+    assert not 账本.事件(输入.身份)
+
+
 def test_正式验收必须提供可独立评估的硬门与评分原料(tmp_path) -> None:
     账本 = 追加式账本(tmp_path / "账本.sqlite")
     编排器 = 中央实验编排器(账本, tmp_path / "暂存", tmp_path / "工件")
@@ -283,12 +361,34 @@ def test_正式验收必须提供可独立评估的硬门与评分原料(tmp_pat
     assert [事件.类型 for 事件 in 账本.事件(输入.身份)] == ["已创建", "治理无效"]
 
 
+def test_直接单期正式验收也拒绝绕开BTC与资金边界(tmp_path) -> None:
+    账本 = 追加式账本(tmp_path / "账本.sqlite")
+    编排器 = 中央实验编排器(账本, tmp_path / "暂存", tmp_path / "工件")
+    输入 = _正式输入("2024-07-01", "2024-12-31", {"单期": True})
+    输入 = 输入.__class__(**{**输入.__dict__, "交易品种": "ETHUSDm", "合约规格": "ETHUSDm"})
+
+    with pytest.raises(ValueError, match="BTC"):
+        编排器.运行(输入, _正式成功执行器())
+    assert 账本.事件(输入.身份) == []
+
+
 def test_正式验收拒绝仅由调用者布尔声明的权益风险证据(tmp_path) -> None:
     账本 = 追加式账本(tmp_path / "账本.sqlite")
     编排器 = 中央实验编排器(账本, tmp_path / "暂存", tmp_path / "工件")
     输入 = _正式输入("2024-07-01", "2024-12-31")
 
     结果 = 编排器.运行(输入, _正式成功执行器(缺少风险证据=True))
+
+    assert 结果.状态 is 实验状态.治理无效
+    assert "封存逐tick权益" in 账本.事件(输入.身份)[-1].内容["原因"]
+
+
+def test_正式验收拒绝任意JSON占位风险工件(tmp_path) -> None:
+    账本 = 追加式账本(tmp_path / "账本.sqlite")
+    编排器 = 中央实验编排器(账本, tmp_path / "暂存", tmp_path / "工件")
+    输入 = _正式输入("2024-07-01", "2024-12-31")
+
+    结果 = 编排器.运行(输入, _占位风险工件执行器())
 
     assert 结果.状态 is 实验状态.治理无效
     assert "封存逐tick权益" in 账本.事件(输入.身份)[-1].内容["原因"]
