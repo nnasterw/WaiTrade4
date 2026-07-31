@@ -3,6 +3,17 @@ from __future__ import annotations
 from decimal import Decimal
 
 from wt4.风险 import 权益点, 风险规则, 核验权益曲线, 计算初始风险
+from wt4.mt5报告 import 成交明细, MT5报告摘要
+from wt4.风险 import 重演MT5已实现余额
+
+
+def _报告(*, 余额回撤金额: Decimal = Decimal("10")) -> MT5报告摘要:
+    成交 = (
+        成交明细("2025.01.01 00:00:00", 1, "", "balance", "", None, None, None, Decimal("0"), Decimal("0"), Decimal("300"), Decimal("300"), ""),
+        成交明细("2025.01.01 01:00:00", 2, "BTCUSDm", "buy", "out", Decimal("0.01"), Decimal("1"), 2, Decimal("0"), Decimal("0"), Decimal("-10"), Decimal("290"), ""),
+        成交明细("2025.01.01 02:00:00", 3, "BTCUSDm", "sell", "out", Decimal("0.01"), Decimal("1"), 3, Decimal("0"), Decimal("0"), Decimal("15"), Decimal("305"), ""),
+    )
+    return MT5报告摘要("EA", "BTCUSDm", "M1", "2025.01.01", "2025.01.02", Decimal("300"), "real ticks", Decimal("1"), Decimal("5"), 2, Decimal("1"), 余额回撤金额, Decimal("0.0333"), Decimal("12"), Decimal("0.04"), (), 成交)
 
 
 def test_初始风险包含滑点与双边佣金() -> None:
@@ -20,6 +31,21 @@ def test_权益回撤触线即为硬失败() -> None:
         风险规则(),
     )
     assert "最大权益回撤" in 结果.硬失败
+
+
+def test_deals可独立重演已实现余额且不冒充权益曲线() -> None:
+    结果 = 重演MT5已实现余额(_报告())
+
+    assert 结果.通过
+    assert [点.余额 for 点 in 结果.曲线] == [Decimal("300"), Decimal("290"), Decimal("305")]
+    assert 结果.最大回撤金额 == Decimal("10")
+    assert 结果.最大回撤比例 == Decimal("0.03333333333333333333333333333")
+
+
+def test_deals回撤与报告不一致不能通过() -> None:
+    结果 = 重演MT5已实现余额(_报告(余额回撤金额=Decimal("9")))
+
+    assert "已实现最大余额回撤金额与报告不一致" in 结果.失败原因
 
 from wt4.风险 import 计算当日亏损, 核验风险限额
 

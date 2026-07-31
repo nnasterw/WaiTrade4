@@ -37,6 +37,23 @@ class 订单明细:
 
 
 @dataclass(frozen=True)
+class 成交明细:
+    时间: str
+    成交号: int
+    品种: str
+    类型: str
+    方向: str
+    手数: Decimal | None
+    价格: Decimal | None
+    订单号: int | None
+    佣金: Decimal
+    隔夜利息: Decimal
+    盈亏: Decimal
+    余额: Decimal
+    注释: str
+
+
+@dataclass(frozen=True)
 class MT5报告摘要:
     专家: str
     品种: str
@@ -54,6 +71,7 @@ class MT5报告摘要:
     最大权益回撤金额: Decimal
     最大权益回撤比例: Decimal
     订单: tuple[订单明细, ...]
+    成交: tuple[成交明细, ...]
 
 
 class _表格解析器(HTMLParser):
@@ -238,6 +256,82 @@ def _解析订单(表格: list[list[list[str]]], 期望品种: str) -> tuple[订
     return tuple(订单)
 
 
+def _时间(value: str, 标签: str) -> None:
+    try:
+        datetime.strptime(value, "%Y.%m.%d %H:%M:%S")
+    except ValueError as 异常:
+        raise MT5报告错误(f"{标签}时间异常: {value}") from 异常
+
+
+def _正整数(value: str, 标签: str) -> int:
+    if not re.fullmatch(r"[1-9]\d*", value):
+        raise MT5报告错误(f"{标签}异常: {value}")
+    return int(value)
+
+
+def _解析成交(表格: list[list[list[str]]], 期望品种: str, 初始资金: Decimal, 总成交数: int) -> tuple[成交明细, ...]:
+    表头 = ["Time", "Deal", "Symbol", "Type", "Direction", "Volume", "Price", "Order", "Commission", "Swap", "Profit", "Balance", "Comment"]
+    匹配表: list[list[str]] | None = None
+    for 表 in 表格:
+        for 位置, 行 in enumerate(表):
+            if 行 != 表头:
+                continue
+            if 匹配表 is not None:
+                raise MT5报告错误("Deals表重复")
+            if 位置 == 0 or 表[位置 - 1] != ["Deals"]:
+                raise MT5报告错误("Deals表标题异常")
+            匹配表 = 表[位置 + 1:]
+    if 匹配表 is None:
+        raise MT5报告错误("缺少Deals成交明细表")
+
+    成交: list[成交明细] = []
+    编号: set[int] = set()
+    上一时间 = ""
+    上一余额: Decimal | None = None
+    for 行 in 匹配表:
+        if not any(行):
+            continue
+        if len(行) != len(表头):
+            if 行 and not re.fullmatch(r"\d{4}\.\d{2}\.\d{2} .*", 行[0]):
+                break
+            raise MT5报告错误("Deals成交行列数异常")
+        时间, 成交号, 品种, 类型, 方向, 手数, 价格, 订单号, 佣金, 隔夜利息, 盈亏, 余额, 注释 = 行
+        _时间(时间, "Deals")
+        if 上一时间 and 时间 < 上一时间:
+            raise MT5报告错误("Deals成交时间倒序")
+        上一时间 = 时间
+        成交号值 = _正整数(成交号, "Deals成交号")
+        if 成交号值 in 编号:
+            raise MT5报告错误(f"Deals成交号重复: {成交号}")
+        编号.add(成交号值)
+        佣金值 = _金额(佣金, "Deals佣金")
+        隔夜利息值 = _金额(隔夜利息, "Deals隔夜利息")
+        盈亏值 = _金额(盈亏, "Deals盈亏")
+        余额值 = _金额(余额, "Deals余额")
+        if 类型 == "balance":
+            if 成交 or 品种 or 方向 or 手数 or 价格 or 订单号 or 注释 or 佣金值 != 0 or 隔夜利息值 != 0 or 盈亏值 != 初始资金 or 余额值 != 初始资金:
+                raise MT5报告错误("Deals初始余额行异常")
+            明细 = 成交明细(时间, 成交号值, 品种, 类型, 方向, None, None, None, 佣金值, 隔夜利息值, 盈亏值, 余额值, 注释)
+        else:
+            if 类型 not in {"buy", "sell"} or 方向 not in {"in", "out"} or 品种 != 期望品种:
+                raise MT5报告错误("Deals类型、方向或品种异常")
+            手数值 = _金额(手数, "Deals手数")
+            价格值 = _金额(价格, "Deals价格")
+            if 手数值 <= 0 or 价格值 <= 0:
+                raise MT5报告错误("Deals手数或价格必须为正")
+            明细 = 成交明细(时间, 成交号值, 品种, 类型, 方向, 手数值, 价格值, _正整数(订单号, "Deals订单号"), 佣金值, 隔夜利息值, 盈亏值, 余额值, 注释)
+            if 上一余额 is None or 余额值 - 上一余额 != 佣金值 + 隔夜利息值 + 盈亏值:
+                raise MT5报告错误("Deals余额变化与费用盈亏不一致")
+        成交.append(明细)
+        上一余额 = 余额值
+
+    if not 成交 or 成交[0].类型 != "balance":
+        raise MT5报告错误("Deals必须以初始余额行开始")
+    if len(成交) - 1 != 总成交数:
+        raise MT5报告错误("Deals成交数量与汇总不一致")
+    return tuple(成交)
+
+
 def 解析MT5报告(路径: Path, 期望: 报告期望) -> MT5报告摘要:
     解析器 = _表格解析器()
     解析器.feed(_读取utf16le(路径))
@@ -253,8 +347,11 @@ def 解析MT5报告(路径: Path, 期望: 报告期望) -> MT5报告摘要:
     总交易字符串 = _必填(字段, "Total Trades")
     if not re.fullmatch(r"0|[1-9]\d*", 总交易字符串):
         raise MT5报告错误(f"Total Trades格式异常: {总交易字符串}")
+    总成交字符串 = _必填(字段, "Total Deals")
+    if not re.fullmatch(r"0|[1-9]\d*", 总成交字符串):
+        raise MT5报告错误(f"Total Deals格式异常: {总成交字符串}")
     最大余额回撤金额, 最大余额回撤比例 = _回撤(_必填(字段, "Balance Drawdown Maximal"), "Balance Drawdown Maximal")
     最大权益回撤金额, 最大权益回撤比例 = _回撤(_必填(字段, "Equity Drawdown Maximal"), "Equity Drawdown Maximal")
     if (专家, 品种, 周期, 开始日, 结束日, 初始资金) != (期望.专家, 期望.品种, 期望.周期, 期望.开始日, 期望.结束日, 期望.初始资金):
         raise MT5报告错误("报告身份与实验输入不一致")
-    return MT5报告摘要(专家, 品种, 周期, 开始日, 结束日, 初始资金, 建模方式, 历史质量, 净利润, int(总交易字符串), 盈利因子, 最大余额回撤金额, 最大余额回撤比例, 最大权益回撤金额, 最大权益回撤比例, _解析订单(解析器.表格, 品种))
+    return MT5报告摘要(专家, 品种, 周期, 开始日, 结束日, 初始资金, 建模方式, 历史质量, 净利润, int(总交易字符串), 盈利因子, 最大余额回撤金额, 最大余额回撤比例, 最大权益回撤金额, 最大权益回撤比例, _解析订单(解析器.表格, 品种), _解析成交(解析器.表格, 品种, 初始资金, int(总成交字符串)))

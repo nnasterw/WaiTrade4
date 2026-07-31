@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from wt4.mt5报告 import MT5报告摘要
-from wt4.风险 import 权益点
+from wt4.风险 import 已实现余额重演结果, 权益点
 
 
 @dataclass(frozen=True)
@@ -15,6 +15,8 @@ class 验收输入:
     极端压力风险通过: bool
     输入工件完整: bool
     治理通过: bool
+    已实现余额重演通过: bool = False
+    权益风险证据完整: bool = False
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,8 @@ def 从MT5报告构造验收输入(
     极端压力风险通过: bool,
     输入工件完整: bool,
     治理通过: bool,
+    已实现余额重演: 已实现余额重演结果 | None = None,
+    权益风险证据完整: bool = False,
 ) -> 验收输入:
     """把已严格解析且身份已核验的报告转为验收所需事实。
 
@@ -49,6 +53,8 @@ def 从MT5报告构造验收输入(
         极端压力风险通过=极端压力风险通过,
         输入工件完整=输入工件完整,
         治理通过=治理通过,
+        已实现余额重演通过=已实现余额重演 is not None and 已实现余额重演.通过,
+        权益风险证据完整=权益风险证据完整,
     )
 
 
@@ -66,6 +72,10 @@ def 评估硬门槛(输入: 验收输入) -> 硬门槛结果:
         失败原因.append("输入或工件不完整")
     if not 输入.治理通过:
         失败原因.append("治理审计未通过")
+    if not 输入.已实现余额重演通过:
+        失败原因.append("Deals已实现余额独立重演未通过")
+    if not 输入.权益风险证据完整:
+        失败原因.append("逐tick权益与开放风险证据不完整")
     return 硬门槛结果(失败原因)
 
 def 核验风险证据(EA权益快照: list[权益点], 独立重演权益: list[权益点], 允许权益偏差: Decimal) -> list[str]:

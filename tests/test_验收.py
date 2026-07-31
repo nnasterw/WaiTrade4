@@ -25,6 +25,8 @@ def test_非真实tick模型不得验收() -> None:
         验收输入(3, Decimal("1"), Decimal("1"), True, True, True)
     )
     assert "必须使用Model 4 / Real Ticks" in 结果.失败原因
+    assert "Deals已实现余额独立重演未通过" in 结果.失败原因
+    assert "逐tick权益与开放风险证据不完整" in 结果.失败原因
 
 from wt4.验收 import 核验风险证据
 from wt4.风险 import 权益点
