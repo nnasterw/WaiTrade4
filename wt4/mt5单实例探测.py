@@ -4,12 +4,75 @@ import json
 from hashlib import sha256
 from pathlib import Path
 import re
+import socket
+import struct
 from typing import Mapping
 
 from wt4.experiment import 实验输入
 from wt4.mt5执行 import MT5回测配置, 隔离MT5执行器
 from wt4.mt5探测 import MT5短窗口探测配置, 共享状态快照, 生成MT5探测配置
 from wt4.编排 import 执行结果
+
+
+def 解析MT5连接端点(日志证据: str) -> tuple[str, ...]:
+    """从本轮 MT5 日志提取服务器连接端点，供代理前置核验。"""
+    模式 = (
+        r"(?:connected|connecting|connection)\s+(?:to|with)\s+(?:server\s+)?([A-Za-z0-9.-]+):(\d{1,5})",
+        r"server\s+([A-Za-z0-9.-]+):(\d{1,5})",
+    )
+    端点: set[str] = set()
+    for 表达式 in 模式:
+        for 主机, 端口文本 in re.findall(表达式, 日志证据, flags=re.IGNORECASE):
+            端口 = int(端口文本)
+            if 0 < 端口 < 65536:
+                端点.add(f"{主机.lower()}:{端口}")
+    return tuple(sorted(端点))
+
+
+def 通过SOCKS5探测端点(代理地址: str, 主机: str, 端口: int, 超时秒数: float = 5) -> dict[str, object]:
+    """仅经 SOCKS5 建立到指定端点的 TCP CONNECT；不允许直连降级。"""
+    if 超时秒数 <= 0 or not 0 < 端口 < 65536:
+        raise ValueError("SOCKS5 探测参数无效")
+    try:
+        代理主机, 代理端口文本 = 代理地址.rsplit(":", 1)
+        代理端口 = int(代理端口文本)
+    except (ValueError, AttributeError) as 异常:
+        raise ValueError(f"SOCKS5 代理地址无效: {代理地址}") from 异常
+    if not 代理主机 or not 0 < 代理端口 < 65536:
+        raise ValueError(f"SOCKS5 代理地址无效: {代理地址}")
+    try:
+        with socket.create_connection((代理主机, 代理端口), timeout=超时秒数) as 连接:
+            连接.settimeout(超时秒数)
+            连接.sendall(b"\x05\x01\x00")
+            协商 = _接收完整(连接, 2)
+            if 协商 != b"\x05\x00":
+                return {"通过": False, "阶段": "认证协商", "响应": 协商.hex()}
+            主机字节 = 主机.encode("idna")
+            if not 1 <= len(主机字节) <= 255:
+                raise ValueError("SOCKS5 目标主机无效")
+            连接.sendall(b"\x05\x01\x00\x03" + bytes([len(主机字节)]) + 主机字节 + struct.pack(">H", 端口))
+            头 = _接收完整(连接, 4)
+            if len(头) != 4 or 头[0] != 5 or 头[1] != 0:
+                return {"通过": False, "阶段": "CONNECT", "响应": 头.hex()}
+            地址长度 = {1: 4, 4: 16}.get(头[3])
+            if 头[3] == 3:
+                地址长度 = _接收完整(连接, 1)[0]
+            if 地址长度 is None:
+                return {"通过": False, "阶段": "CONNECT地址类型", "响应": 头.hex()}
+            _接收完整(连接, 地址长度 + 2)
+            return {"通过": True, "阶段": "CONNECT"}
+    except OSError as 异常:
+        return {"通过": False, "阶段": "网络异常", "原因": str(异常)}
+
+
+def _接收完整(连接: socket.socket, 长度: int) -> bytes:
+    内容 = bytearray()
+    while len(内容) < 长度:
+        片段 = 连接.recv(长度 - len(内容))
+        if not 片段:
+            raise OSError("SOCKS5 响应提前结束")
+        内容.extend(片段)
+    return bytes(内容)
 
 
 def 解析MT5生命周期(日志证据: str) -> dict[str, object]:

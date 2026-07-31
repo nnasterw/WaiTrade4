@@ -7,6 +7,7 @@ from threading import Event
 import pytest
 
 from wt4.experiment import 实验输入
+from wt4.mt5后台 import MT5后台进程
 from wt4.编排 import 中央单实例后台队列, 中央实验编排器, 后台任务状态, 实验状态, 执行结果
 from wt4.账本 import 追加式账本
 
@@ -86,6 +87,41 @@ def test_启动恢复不改写已有终态或仅排队实验(tmp_path) -> None:
     assert 编排器.回收未终态实验(已归档.身份) is False
     assert [事件.类型 for 事件 in 账本.事件(已排队.身份)] == ["已排队"]
     assert [事件.类型 for 事件 in 账本.事件(已归档.身份)] == ["已创建", "已归档"]
+
+
+def test_受限恢复仅在归属进程组已回收后追加无效终态(tmp_path) -> None:
+    账本 = 追加式账本(tmp_path / "账本.sqlite")
+    编排器 = 中央实验编排器(账本, tmp_path / "暂存", tmp_path / "工件")
+    输入 = _输入({"任务": "受限恢复"})
+    暂存目录 = tmp_path / "暂存" / 输入.身份
+    暂存目录.mkdir(parents=True)
+    账本.追加(输入.身份, 实验状态.已创建, {"输入": {}})
+    (暂存目录 / "后台-归属.json").write_text("{}", encoding="utf-8")
+
+    assert 编排器.受限恢复遗留后台实验(输入.身份) is False
+    assert [事件.类型 for 事件 in 账本.事件(输入.身份)] == ["已创建"]
+
+
+def test_受限恢复在进程组证据通过后才追加无效终态(tmp_path, monkeypatch) -> None:
+    账本 = 追加式账本(tmp_path / "账本.sqlite")
+    编排器 = 中央实验编排器(账本, tmp_path / "暂存", tmp_path / "工件")
+    输入 = _输入({"任务": "已验证受限恢复"})
+    暂存目录 = tmp_path / "暂存" / 输入.身份
+    暂存目录.mkdir(parents=True)
+    账本.追加(输入.身份, 实验状态.已创建, {"输入": {}})
+    归属记录 = 暂存目录 / "后台-归属.json"
+    归属记录.write_text("{}", encoding="utf-8")
+    已调用: list[Path] = []
+
+    def _已回收(路径: Path) -> bool:
+        已调用.append(路径)
+        return True
+
+    monkeypatch.setattr(MT5后台进程, "回收遗留自有进程组", _已回收)
+
+    assert 编排器.受限恢复遗留后台实验(输入.身份) is True
+    assert 已调用 == [归属记录]
+    assert [事件.类型 for 事件 in 账本.事件(输入.身份)] == ["已创建", "执行无效"]
 
 
 class _留痕执行器:

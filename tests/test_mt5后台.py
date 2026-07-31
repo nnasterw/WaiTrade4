@@ -39,6 +39,44 @@ def test_超时后只终止自身进程组(tmp_path: Path) -> None:
     assert 进程.快照().状态 == "已退出"
 
 
+def test_归属记录仅在命令仍携带实验身份时受限回收进程组(tmp_path: Path) -> None:
+    实验目录 = tmp_path / ("a" * 64)
+    实验目录.mkdir()
+    进程 = MT5后台进程.启动(
+        (
+            sys.executable,
+            "-c",
+            f"import time; 受控实验={str(实验目录)!r}; time.sleep(30)",
+        ),
+        实验目录,
+        dict(os.environ),
+        实验目录,
+    )
+
+    归属记录 = 实验目录 / "后台-归属.json"
+    assert 归属记录.is_file()
+    assert MT5后台进程.回收遗留自有进程组(归属记录) is True
+    assert 进程.等待(5) is not None
+    assert "已受限回收" in 归属记录.read_text(encoding="utf-8")
+
+
+def test_归属记录验证片段不匹配时绝不回收进程(tmp_path: Path) -> None:
+    实验目录 = tmp_path / ("b" * 64)
+    实验目录.mkdir()
+    进程 = MT5后台进程.启动(
+        (sys.executable, "-c", "import time; time.sleep(30)"),
+        实验目录,
+        dict(os.environ),
+        实验目录,
+    )
+
+    归属记录 = 实验目录 / "后台-归属.json"
+    assert MT5后台进程.回收遗留自有进程组(归属记录) is False
+    assert 进程.快照().状态 == "运行中"
+    进程.终止自有进程组()
+    assert 进程.等待(5) is not None
+
+
 def test_只识别FD4精确指向wine前缀的wineserver(tmp_path: Path) -> None:
     前缀 = tmp_path / "受控"
     文本 = f"p10\nf4\nn{前缀}\n".encode()

@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 
 from wt4.experiment import 实验输入
-from wt4.mt5单实例探测 import 单实例MT5探测执行器
+from wt4.mt5单实例探测 import 单实例MT5探测执行器, 通过SOCKS5探测端点
 from wt4.mt5探测 import MT5短窗口探测配置
 from wt4.账本 import 追加式账本
 from wt4.编排 import 中央实验编排器
@@ -21,6 +21,8 @@ from wt4.编排 import 中央实验编排器
 默认历史参数 = 默认Wine前缀 / (
     "drive_c/Program Files/MetaTrader 5/MQL5/Profiles/Tester/v11btc-r234.set"
 )
+默认代理地址 = "127.0.0.1:7897"
+默认代理探测端点 = ("mt5.exness.com", 443)
 
 
 def 计算三风险参数内容(来源: Path) -> bytes:
@@ -56,7 +58,24 @@ def 生成参数文件名(参数哈希: str, 开始日: str, 结束日: str, 超
     return f"v11btc-r234-risk3-{日期标识}-t{超时秒数}-{试验标识}-{参数哈希[:12]}.set"
 
 
-def 创建输入(参数哈希: str, 配置: MT5短窗口探测配置, 超时秒数: int, 试验标识: str = "initial") -> 实验输入:
+def 核验SOCKS5代理前置(
+    代理地址: str = 默认代理地址,
+    探测端点: tuple[str, int] = 默认代理探测端点,
+) -> dict[str, object]:
+    """只在 SOCKS5 CONNECT 已通过时允许启动 MT5，绝不降级直连。"""
+    探测 = 通过SOCKS5探测端点(代理地址, *探测端点)
+    if 探测.get("通过") is not True:
+        raise ValueError(f"SOCKS5 代理前置探测失败，拒绝启动 MT5: {探测}")
+    return 探测
+
+
+def 创建输入(
+    参数哈希: str,
+    配置: MT5短窗口探测配置,
+    超时秒数: int,
+    试验标识: str = "initial",
+    代理前置探测: dict[str, object] | None = None,
+) -> 实验输入:
     return 实验输入(
         策略实现提交="历史成功链兼容性探测:WaiTrade2/WaiTrade_OB",
         二进制哈希=sha256((配置.终端目录 / "MQL5/Experts/WaiTrade2/WaiTrade_OB.ex5").read_bytes()).hexdigest(),
@@ -71,6 +90,7 @@ def 创建输入(参数哈希: str, 配置: MT5短窗口探测配置, 超时秒�
             "配置路径": "工作区ASCII暂存目录",
             "MT5实际参数目录": "Tester/MQL5/Profiles/Tester",
             "运行超时秒数": 超时秒数,
+            "SOCKS5代理前置探测": 代理前置探测,
         },
         数据指纹="MT5-Tester-远程数据:BTCUSDm-M1",
         成本快照="MT5-Tester-实时合约与报价",
@@ -101,6 +121,10 @@ def main() -> None:
         raise SystemExit("Wine、Wine 前缀或 Tester 路径无效")
     if not (实参.tester / "MQL5/Experts/WaiTrade2/WaiTrade_OB.ex5").is_file():
         raise SystemExit("历史成功 EA 不存在")
+    try:
+        代理前置探测 = 核验SOCKS5代理前置()
+    except ValueError as 异常:
+        raise SystemExit(str(异常)) from 异常
 
     运行根目录 = 工作区 / "runtime" / "单实例历史链兼容性"
     参数哈希 = sha256(计算三风险参数内容(实参.历史参数)).hexdigest()
@@ -123,7 +147,7 @@ def main() -> None:
         服务器=实参.服务器,
         参数文件路径=参数副本,
     )
-    输入 = 创建输入(参数哈希, 配置, 实参.超时秒数, 实参.试验标识)
+    输入 = 创建输入(参数哈希, 配置, 实参.超时秒数, 实参.试验标识, 代理前置探测)
     编排器 = 中央实验编排器(
         追加式账本(运行根目录 / "账本.sqlite"),
         运行根目录 / "暂存",

@@ -4,7 +4,13 @@ import json
 from pathlib import Path
 
 from wt4.experiment import 实验输入
-from wt4.mt5单实例探测 import 单实例MT5探测执行器, 解析MT5实际测试区间, 解析MT5生命周期
+from wt4.mt5单实例探测 import (
+    单实例MT5探测执行器,
+    解析MT5实际测试区间,
+    解析MT5生命周期,
+    解析MT5连接端点,
+    通过SOCKS5探测端点,
+)
 from wt4.mt5探测 import MT5短窗口探测配置
 from wt4.编排 import 实验状态
 
@@ -116,6 +122,37 @@ def test_从_agent_日志提取实际测试区间而不是信任_ini() -> None:
 
     assert 解析MT5实际测试区间(日志) == ("2025.02.01", "2025.03.01")
     assert 解析MT5实际测试区间("Tester\tno test started") is None
+
+
+def test_从本轮日志提取实际交易服务器端点() -> None:
+    日志 = "Network connecting to server mt5.exness.com:443\nconnected with server 1.2.3.4:444"
+
+    assert 解析MT5连接端点(日志) == ("1.2.3.4:444", "mt5.exness.com:443")
+
+
+def test_socks5探测连接失败仍不会直连(monkeypatch) -> None:
+    class _失败连接:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+        def settimeout(self, _):
+            return None
+
+        def sendall(self, _):
+            return None
+
+        def recv(self, _):
+            raise OSError("代理拒绝")
+
+    monkeypatch.setattr("wt4.mt5单实例探测.socket.create_connection", lambda *_args, **_kwargs: _失败连接())
+
+    结果 = 通过SOCKS5探测端点("127.0.0.1:7897", "mt5.exness.com", 443)
+
+    assert 结果["通过"] is False
+    assert 结果["阶段"] == "网络异常"
 
 
 def test_仅封存本轮新增日志并能识别完整生命周期(tmp_path) -> None:

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import json
 import os
 from pathlib import Path
+import re
 import signal
 import subprocess
 from time import monotonic, sleep
@@ -33,6 +35,7 @@ class MT5后台进程:
         self._进程 = 进程
         self.标准输出 = 标准输出
         self.标准错误 = 标准错误
+        self.归属记录 = 标准输出.parent / "后台-归属.json"
         self._已启动时间 = datetime.now(timezone.utc).isoformat()
         self._进程组号 = os.getpgid(进程.pid) if os.name == "posix" else None
         self._Wine前缀 = Wine前缀
@@ -40,6 +43,7 @@ class MT5后台进程:
         self._自有Wine服务进程号: set[int] = set()
         if self._进程组号 is not None and self._进程组号 != 进程.pid:
             raise RuntimeError("后台 MT5 未创建独立进程组")
+        self._写入归属记录("运行中")
 
     @classmethod
     def 启动(
@@ -71,6 +75,99 @@ class MT5后台进程:
                 start_new_session=os.name == "posix",
             )
         return cls(进程, 标准输出, 标准错误, Wine前缀, 启动前Wine服务进程号)
+
+    def _归属内容(self, 状态: str, *, 原因: str | None = None) -> dict[str, object]:
+        """生成可由后继宿主验证的最小进程组归属证据。"""
+        实验目录 = self.归属记录.parent.resolve()
+        内容: dict[str, object] = {
+            "版本": 1,
+            "状态": 状态,
+            "进程号": self._进程.pid,
+            "进程组号": self._进程组号,
+            "实验目录": str(实验目录),
+            # 实验目录末级为不可变身份；它必须仍出现在进程命令行中，才允许
+            # 新宿主操作该独立进程组。不能按 terminal/wine 进程名回收。
+            "命令验证片段": 实验目录.name,
+            "已启动时间": self._已启动时间,
+        }
+        if 原因 is not None:
+            内容["原因"] = 原因
+        return 内容
+
+    def _写入归属记录(self, 状态: str, *, 原因: str | None = None) -> None:
+        if self.归属记录.exists():
+            raise ValueError(f"后台 MT5 归属记录已存在: {self.归属记录}")
+        临时 = self.归属记录.with_suffix(".json.tmp")
+        临时.write_text(json.dumps(self._归属内容(状态, 原因=原因), ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        临时.replace(self.归属记录)
+
+    @staticmethod
+    def _读取归属记录(归属记录: Path) -> dict[str, object] | None:
+        if not 归属记录.is_file() or 归属记录.is_symlink():
+            return None
+        try:
+            内容 = json.loads(归属记录.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(内容, dict) or 内容.get("版本") != 1:
+            return None
+        if not isinstance(内容.get("进程号"), int) or not isinstance(内容.get("进程组号"), int):
+            return None
+        if 内容["进程号"] != 内容["进程组号"]:
+            return None
+        if not isinstance(内容.get("命令验证片段"), str) or not 内容["命令验证片段"]:
+            return None
+        return 内容
+
+    @staticmethod
+    def _进程组成员(进程组号: int) -> list[tuple[int, str]]:
+        查询 = subprocess.run(["ps", "-axo", "pid=,pgid=,stat=,command="], text=True, capture_output=True, check=False)
+        if 查询.returncode != 0:
+            return []
+        成员: list[tuple[int, str]] = []
+        for 行 in 查询.stdout.splitlines():
+            匹配 = re.match(r"\s*(\d+)\s+(\d+)\s+(\S+)\s+(.*)", 行)
+            if 匹配 and int(匹配.group(2)) == 进程组号 and not 匹配.group(3).startswith("Z"):
+                成员.append((int(匹配.group(1)), 匹配.group(4)))
+        return 成员
+
+    @classmethod
+    def 回收遗留自有进程组(cls, 归属记录: Path, 超时秒数: float = 10) -> bool:
+        """仅凭归属记录精确回收宿主退出后遗留的独立进程组。
+
+        必须同时满足：记录结构有效、PGID 等于原始组长 PID、该组仍有成员，
+        且至少一个成员的命令行包含本轮实验身份。验证失败时绝不发送信号。
+        """
+        if os.name != "posix" or 超时秒数 <= 0:
+            return False
+        内容 = cls._读取归属记录(归属记录)
+        if 内容 is None or 内容.get("状态") != "运行中":
+            return False
+        进程组号 = int(内容["进程组号"])
+        成员 = cls._进程组成员(进程组号)
+        验证片段 = str(内容["命令验证片段"])
+        if not 成员 or not any(验证片段 in 命令 for _, 命令 in 成员):
+            return False
+        try:
+            os.killpg(进程组号, signal.SIGTERM)
+        except ProcessLookupError:
+            return False
+        # macOS 上组长退出后，短暂的僵尸记录仍可能由父 Python 等待回收；
+        # 此时进程组内已无可运行成员，不能把它误判为回收失败。
+        截止 = monotonic() + 超时秒数
+        while monotonic() < 截止:
+            if not cls._进程组成员(进程组号):
+                cls._更新归属记录状态(归属记录, 内容, "已受限回收")
+                return True
+            sleep(0.1)
+        return False
+
+    @staticmethod
+    def _更新归属记录状态(归属记录: Path, 内容: dict[str, object], 状态: str) -> None:
+        更新 = {**内容, "状态": 状态, "结束时间": datetime.now(timezone.utc).isoformat()}
+        临时 = 归属记录.with_suffix(".json.tmp")
+        临时.write_text(json.dumps(更新, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        临时.replace(归属记录)
 
     @staticmethod
     def _解码lsof路径(原始路径: bytes) -> Path | None:
@@ -195,7 +292,11 @@ class MT5后台进程:
         if 超时秒数 <= 0:
             raise ValueError("后台 MT5 等待超时必须为正")
         try:
-            return self._进程.wait(timeout=超时秒数)
+            返回码 = self._进程.wait(timeout=超时秒数)
+            内容 = self._读取归属记录(self.归属记录)
+            if 内容 is not None and 内容.get("状态") == "运行中":
+                self._更新归属记录状态(self.归属记录, 内容, "已退出")
+            return 返回码
         except subprocess.TimeoutExpired:
             return None
 

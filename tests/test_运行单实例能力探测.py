@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from wt4.运行单实例能力探测 import 创建输入, 生成三风险参数副本, 生成参数文件名
+from wt4.运行单实例能力探测 import (
+    创建输入,
+    生成三风险参数副本,
+    生成参数文件名,
+    核验SOCKS5代理前置,
+)
 from wt4.mt5探测 import MT5短窗口探测配置
 
 
@@ -56,3 +61,18 @@ def test_实验身份纳入运行超时这一单变量(tmp_path: Path) -> None:
 
     assert 创建输入("a" * 64, 配置, 600).身份 != 创建输入("a" * 64, 配置, 900).身份
     assert 创建输入("a" * 64, 配置, 600, "fromdate-v1").身份 != 创建输入("a" * 64, 配置, 600, "parallel-v1").身份
+    assert 创建输入("a" * 64, 配置, 600, 代理前置探测={"通过": True, "阶段": "CONNECT"}).身份 != 创建输入("a" * 64, 配置, 600).身份
+
+
+def test_代理前置失败时拒绝启动而不允许直连(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "wt4.运行单实例能力探测.通过SOCKS5探测端点",
+        lambda *_: {"通过": False, "阶段": "CONNECT"},
+    )
+
+    try:
+        核验SOCKS5代理前置()
+    except ValueError as 异常:
+        assert "拒绝启动 MT5" in str(异常)
+    else:
+        raise AssertionError("SOCKS5 前置失败时不得启动或降级直连")
