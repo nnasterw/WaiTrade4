@@ -1,0 +1,22 @@
+{
+  "入口相对路径": "Experts/WaiTrade2/WaiTrade_OB.mq5",
+  "参数原始路径": "/Users/wen/Projects/ClaudeCode/WaiTrade2/mql5/Presets/V11-BTC-M5-R21.set",
+  "文件哈希": {
+    "Experts/WaiTrade2/WaiTrade_OB.mq5": "a28d353314327fc1c82bfaa2bb2ff883c646f4c77e8c0c5420b12252dde3488a",
+    "Include/WaiTrade2/BarTracker.mqh": "cd3c8cc6a16b96a64d22637a8fdc80fb0856fcbf9c1f7d147951181eb52ba8f4",
+    "Include/WaiTrade2/Config.mqh": "3c6dfa94a13aa140b7de2ccdef978fda43214b6e22d8aa4d60b14b79aebe6b26",
+    "Include/WaiTrade2/DecayDetector.mqh": "8636b83110df682c1cc14332d7d3967aa81fbf541ec73cb970763b55d3fa956f",
+    "Include/WaiTrade2/EntryEngine.mqh": "d14d0643b294c63bf89c491c8e7bf31ea9364e9af297c9423a5aa1f8afa4a3c8",
+    "Include/WaiTrade2/MarketState.mqh": "3e8c6305dbb85914c582101087db402737af6d6a12ac204d508fbfaf15bf0aa3",
+    "Include/WaiTrade2/MathUtils.mqh": "888b0e9926e63c8c43143758ead2afe56b3fd46d8b29360baa62d379467ae3ba",
+    "Include/WaiTrade2/OBDetector.mqh": "899213bbecd4f0de2b26edd8aba8a26876b4a8d3c70eb9d0da88194a5f1bb5f5",
+    "Include/WaiTrade2/PositionManager.mqh": "8707f35c0fbf2036ba5664dd3e747543e74ec7f7b4b3a65523fafd84d049d776",
+    "Include/WaiTrade2/ScoreEngine.mqh": "4298972680ce1f797685ee876a1b5e77ee81b60bd34dd5f92c2b8a993e16312f",
+    "Include/WaiTrade2/SignalEngine.mqh": "26744519c85b594c796954bfa163fac2c6845197c9b45d1f2f0f726bf306aa9e",
+    "Include/WaiTrade2/TradeOps.mqh": "e7aa49cb1e04c4742b52f518515d75d9354069857b14f444bbcb259c4c0720a0",
+    "Include/WaiTrade2/Types.mqh": "834bd952c6e700d17baa3144c886509902e6451cf9fec92a616a1220dc638d85",
+    "Include/WaiTrade2/Utils.mqh": "6cdaf5743c87901ca546ae7e9615044a00f10ccb1e7911c28afe6a7f876fe098",
+    "参数/V11-BTC-M5-R21.set": "55a9e6802624061fdc1b1368c0b2faca44aad59d4577441b9e2b6804c1fcf073"
+  },
+  "来源标识": "WaiTrade2:f0bd7681cc8156314034d6a0a360a8e9d7ef7b6a:v11_btc_m5_r21"
+}
