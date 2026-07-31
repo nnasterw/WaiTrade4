@@ -47,6 +47,16 @@ def test_只识别FD4精确指向wine前缀的wineserver(tmp_path: Path) -> None
     assert MT5后台进程._解析Wine服务进程(10, f"p10\nf4\nn{tmp_path / '其他'}\n".encode(), 前缀) == set()
 
 
+def test_认领时排除启动前已存在的同前缀wine服务(tmp_path: Path, monkeypatch) -> None:
+    进程 = MT5后台进程.__new__(MT5后台进程)
+    进程._Wine前缀 = tmp_path / "受控"
+    进程._启动前Wine服务进程号 = {10}
+    进程._自有Wine服务进程号 = set()
+    monkeypatch.setattr(进程, "_当前自有Wine服务", lambda: {10, 11})
+
+    assert 进程.认领自有Wine服务() == (11,)
+
+
 def test_解码lsof的中文路径转义且拒绝不完整转义(tmp_path: Path) -> None:
     前缀 = tmp_path / "甲-wine前缀"
     转义 = str(前缀).encode().replace(b"\xe7", b"\\xe7").replace(b"\x94", b"\\x94").replace(b"\xb2", b"\\xb2").replace(b"\xe5", b"\\xe5").replace(b"\x89", b"\\x89").replace(b"\x8d", b"\\x8d").replace(b"\xe7", b"\\xe7").replace(b"\xbc", b"\\xbc").replace(b"\x80", b"\\x80")

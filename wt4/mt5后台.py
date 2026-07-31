@@ -22,13 +22,21 @@ class 后台进程快照:
 class MT5后台进程:
     """只管理本对象创建的独立进程组，不枚举或清理其他 MT5/Wine 进程。"""
 
-    def __init__(self, 进程: subprocess.Popen[object], 标准输出: Path, 标准错误: Path, Wine前缀: Path | None) -> None:
+    def __init__(
+        self,
+        进程: subprocess.Popen[object],
+        标准输出: Path,
+        标准错误: Path,
+        Wine前缀: Path | None,
+        启动前Wine服务进程号: set[int],
+    ) -> None:
         self._进程 = 进程
         self.标准输出 = 标准输出
         self.标准错误 = 标准错误
         self._已启动时间 = datetime.now(timezone.utc).isoformat()
         self._进程组号 = os.getpgid(进程.pid) if os.name == "posix" else None
         self._Wine前缀 = Wine前缀
+        self._启动前Wine服务进程号 = 启动前Wine服务进程号
         self._自有Wine服务进程号: set[int] = set()
         if self._进程组号 is not None and self._进程组号 != 进程.pid:
             raise RuntimeError("后台 MT5 未创建独立进程组")
@@ -49,6 +57,9 @@ class MT5后台进程:
         标准错误 = 工件目录 / "后台-stderr.txt"
         if 标准输出.exists() or 标准错误.exists():
             raise ValueError("后台 MT5 日志工件已存在")
+        Wine前缀文本 = 环境变量.get("WINEPREFIX")
+        Wine前缀 = Path(Wine前缀文本).resolve() if Wine前缀文本 else None
+        启动前Wine服务进程号 = cls._查询Wine服务(Wine前缀) if Wine前缀 is not None and os.name == "posix" else set()
         with 标准输出.open("w", encoding="utf-8") as 输出, 标准错误.open("w", encoding="utf-8") as 错误:
             进程 = subprocess.Popen(
                 命令,
@@ -59,9 +70,7 @@ class MT5后台进程:
                 text=True,
                 start_new_session=os.name == "posix",
             )
-        Wine前缀文本 = 环境变量.get("WINEPREFIX")
-        Wine前缀 = Path(Wine前缀文本).resolve() if Wine前缀文本 else None
-        return cls(进程, 标准输出, 标准错误, Wine前缀)
+        return cls(进程, 标准输出, 标准错误, Wine前缀, 启动前Wine服务进程号)
 
     @staticmethod
     def _解码lsof路径(原始路径: bytes) -> Path | None:
@@ -119,26 +128,30 @@ class MT5后台进程:
     def 认领自有Wine服务(self) -> tuple[int, ...]:
         """登记本后台调用派生的 Prefix 专属 wineserver。
 
-        调用方已在运行前拒绝任意既有 MT5/Wine 进程；因此此处仅能认领
-        本次运行后、且环境变量精确指向本对象 Prefix 的服务进程。
+        只认领启动前不存在、且 FD 4 精确指向本对象 Prefix 的服务进程；
+        即便有外部调用恰好使用同一 Prefix，也不会被本对象回收。
         """
         if self._Wine前缀 is None or os.name != "posix":
             return ()
-        self._自有Wine服务进程号.update(self._当前自有Wine服务())
+        self._自有Wine服务进程号.update(self._当前自有Wine服务() - self._启动前Wine服务进程号)
         return tuple(sorted(self._自有Wine服务进程号))
 
-    def _当前自有Wine服务(self) -> set[int]:
-        if self._Wine前缀 is None or os.name != "posix":
+    @classmethod
+    def _查询Wine服务(cls, Wine前缀: Path | None) -> set[int]:
+        if Wine前缀 is None or os.name != "posix":
             return set()
         结果: set[int] = set()
-        for 进程号 in self._Wine服务候选进程号():
+        for 进程号 in cls._Wine服务候选进程号():
             查询 = subprocess.run(
                 ["lsof", "-Fn", "-a", "-p", str(进程号), "-d", "4"],
                 capture_output=True, check=False,
             )
             if 查询.returncode == 0:
-                结果.update(self._解析Wine服务进程(进程号, 查询.stdout, self._Wine前缀))
+                结果.update(cls._解析Wine服务进程(进程号, 查询.stdout, Wine前缀))
         return 结果
+
+    def _当前自有Wine服务(self) -> set[int]:
+        return self._查询Wine服务(self._Wine前缀)
 
     def 终止自有Wine服务(self, 超时秒数: float = 10) -> tuple[int, ...]:
         """仅回收已认领且仍绑定本对象 Prefix 的遗留 wineserver。"""
