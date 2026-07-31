@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
+import os
 from pathlib import Path
 
 
@@ -80,12 +81,16 @@ class 共享状态快照:
         if not 目录列表:
             raise ValueError("至少需要一个受监控目录")
         文件: dict[str, str] = {}
+        共同根目录 = Path(os.path.commonpath([str(目录) for 目录 in 目录列表]))
         for 根目录 in 目录列表:
             if not 根目录.is_dir():
                 raise ValueError(f"受监控目录不存在: {根目录}")
+            根标识 = 根目录.relative_to(共同根目录).as_posix()
+            if 根标识 == ".":
+                根标识 = 根目录.name
             for 路径 in sorted(根目录.rglob("*")):
                 if 路径.is_file() and not 路径.is_symlink():
-                    相对路径 = f"{根目录.name}/{路径.relative_to(根目录).as_posix()}"
+                    相对路径 = f"{根标识}/{路径.relative_to(根目录).as_posix()}"
                     if 相对路径 in 文件:
                         raise ValueError(f"受监控目录名称冲突: {相对路径}")
                     文件[相对路径] = sha256(路径.read_bytes()).hexdigest()
