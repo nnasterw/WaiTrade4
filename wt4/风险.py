@@ -82,6 +82,27 @@ class 逐tick日内权益风险结果:
         )
 
 
+@dataclass(frozen=True)
+class 风险限额快照:
+    """某个风险实际暴露时刻的独立风险快照。"""
+
+    时间: str
+    当前权益: Decimal
+    单笔初始风险: Decimal
+    开放初始风险: Decimal
+
+
+@dataclass(frozen=True)
+class 风险限额重演结果:
+    最大单笔初始风险比例: Decimal
+    最大开放初始风险比例: Decimal
+    失败原因: tuple[str, ...]
+
+    @property
+    def 通过(self) -> bool:
+        return not self.失败原因
+
+
 def 计算初始风险(*, 入场价: Decimal, 止损价: Decimal, 手数: Decimal, 每价格单位价值: Decimal, 双边佣金: Decimal, 开仓压力滑点价格: Decimal) -> Decimal:
     if 手数 <= 0 or 每价格单位价值 <= 0 or 双边佣金 < 0 or 开仓压力滑点价格 < 0:
         raise ValueError("风险输入必须有效且非负")
@@ -228,3 +249,41 @@ def 核验风险限额(*, 当前权益: Decimal, 日初权益: Decimal, 单笔�
     if 当日亏损 >= 日初权益 * 规则.单日亏损上限:
         失败.append("当日亏损达到上限")
     return 失败
+
+
+def 重演风险限额(
+    快照列表: list[风险限额快照],
+    规则: 风险规则 = 风险规则(),
+) -> 风险限额重演结果:
+    """以风险实际发生时的权益重演单笔和开放初始风险。
+
+    该重演不从成交报告臆造止损或风险金额，调用方必须提供独立快照。
+    """
+    if not 快照列表:
+        raise ValueError("风险限额快照不能为空")
+
+    最大单笔初始风险比例 = Decimal("0")
+    最大开放初始风险比例 = Decimal("0")
+    失败原因: list[str] = []
+    for 快照 in 快照列表:
+        if 快照.当前权益 <= 0:
+            raise ValueError("风险限额快照当前权益必须为正")
+        if 快照.单笔初始风险 < 0 or 快照.开放初始风险 < 0:
+            raise ValueError("风险限额快照风险金额不得为负")
+
+        单笔比例 = 快照.单笔初始风险 / 快照.当前权益
+        开放比例 = 快照.开放初始风险 / 快照.当前权益
+        最大单笔初始风险比例 = max(最大单笔初始风险比例, 单笔比例)
+        最大开放初始风险比例 = max(最大开放初始风险比例, 开放比例)
+        if 单笔比例 > 规则.单笔风险上限:
+            失败原因.append("单笔初始风险超过候选上限")
+        if 单笔比例 > 规则.绝对单笔风险上限:
+            失败原因.append("单笔初始风险超过绝对上限")
+        if 开放比例 > 规则.开放风险上限:
+            失败原因.append("开放初始风险超过上限")
+
+    return 风险限额重演结果(
+        最大单笔初始风险比例,
+        最大开放初始风险比例,
+        tuple(dict.fromkeys(失败原因)),
+    )

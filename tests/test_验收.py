@@ -5,7 +5,13 @@ from decimal import Decimal
 
 from wt4.验收 import 验收输入, 评估硬门槛
 from wt4.验收 import 从MT5报告构造验收输入
-from wt4.风险 import 重演MT5已实现余额, 重演MT5成交风险, 重演逐tick日内权益风险
+from wt4.风险 import (
+    重演MT5已实现余额,
+    重演MT5成交风险,
+    重演逐tick日内权益风险,
+    风险限额快照,
+    重演风险限额,
+)
 from tests.test_风险重演 import _报告
 
 
@@ -94,3 +100,22 @@ def test_逐tick日内权益浮亏触及十百分比红线不能验收() -> None
     )
 
     assert "逐tick日内权益亏损达到上限" in 评估硬门槛(输入).失败原因
+
+
+def test_单笔初始风险超过三百分比即使不超过绝对上限也不能验收() -> None:
+    输入 = 验收输入(
+        4, Decimal("1"), Decimal("1"), True, True, True,
+        风险限额重演=重演风险限额([
+            风险限额快照("2025.01.01 01:00:00", Decimal("300"), Decimal("10"), Decimal("10")),
+        ]),
+    )
+
+    失败 = 评估硬门槛(输入).失败原因
+    assert "单笔初始风险超过候选上限" in 失败
+    assert "单笔初始风险超过绝对上限" not in 失败
+
+
+def test_缺少单笔与开放风险重演证据不能验收() -> None:
+    失败 = 评估硬门槛(验收输入(4, Decimal("1"), Decimal("1"), True, True, True)).失败原因
+
+    assert "单笔与开放风险证据不完整" in 失败

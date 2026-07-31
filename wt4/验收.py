@@ -7,6 +7,7 @@ from wt4.mt5报告 import MT5报告摘要
 from wt4.风险 import (
     已实现余额重演结果,
     成交风险重演结果,
+    风险限额重演结果,
     权益点,
     逐tick日内权益风险结果,
     风险规则,
@@ -27,6 +28,7 @@ class 验收输入:
     日初余额: dict[str, Decimal] | None = None
     已实现日损失: dict[str, Decimal] | None = None
     逐tick日内权益风险: 逐tick日内权益风险结果 | None = None
+    风险限额重演: 风险限额重演结果 | None = None
 
 
 @dataclass(frozen=True)
@@ -50,6 +52,7 @@ def 从MT5报告构造验收输入(
     成交风险重演: 成交风险重演结果 | None = None,
     逐tick权益证据完整: bool = False,
     逐tick日内权益风险: 逐tick日内权益风险结果 | None = None,
+    风险限额重演: 风险限额重演结果 | None = None,
 ) -> 验收输入:
     """把已严格解析且身份已核验的报告转为验收所需事实。
 
@@ -76,6 +79,7 @@ def 从MT5报告构造验收输入(
         日初余额=dict(成交风险重演.日初余额) if 成交风险重演 is not None else None,
         已实现日损失=dict(成交风险重演.已实现日损失) if 成交风险重演 is not None else None,
         逐tick日内权益风险=逐tick日内权益风险,
+        风险限额重演=风险限额重演,
     )
 
 
@@ -98,6 +102,10 @@ def 评估硬门槛(输入: 验收输入) -> 硬门槛结果:
         失败原因.append("Deals已实现余额独立重演未通过")
     if not 输入.权益风险证据完整:
         失败原因.append("逐tick权益与开放风险证据不完整")
+    if 输入.风险限额重演 is None:
+        失败原因.append("单笔与开放风险证据不完整")
+    else:
+        失败原因.extend(输入.风险限额重演.失败原因)
     if 输入.逐tick日内权益风险 is None:
         if 输入.权益风险证据完整:
             失败原因.append("逐tick权益与开放风险证据不完整")

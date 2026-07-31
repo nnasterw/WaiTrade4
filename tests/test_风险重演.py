@@ -3,7 +3,15 @@ from __future__ import annotations
 from dataclasses import replace
 from decimal import Decimal
 
-from wt4.风险 import 权益点, 风险规则, 核验权益曲线, 计算初始风险, 重演逐tick日内权益风险
+from wt4.风险 import (
+    权益点,
+    风险规则,
+    风险限额快照,
+    核验权益曲线,
+    计算初始风险,
+    重演逐tick日内权益风险,
+    重演风险限额,
+)
 from wt4.mt5报告 import 成交明细, MT5报告摘要
 from wt4.风险 import 重演MT5已实现余额, 重演MT5成交风险
 
@@ -85,6 +93,29 @@ def test_单笔和开放风险不能越过各自上限() -> None:
         当日亏损=Decimal("31"), 规则=风险规则(),
     )
     assert set(失败) == {"单笔风险超过候选上限", "开放初始风险超过上限", "当日亏损达到上限"}
+
+
+def test_风险限额重演以风险发生时权益核验三与五百分比红线() -> None:
+    结果 = 重演风险限额([
+        风险限额快照("2025.01.01 01:00:00", Decimal("300"), Decimal("9"), Decimal("12")),
+        风险限额快照("2025.01.01 02:00:00", Decimal("250"), Decimal("10"), Decimal("13")),
+    ])
+
+    assert 结果.最大单笔初始风险比例 == Decimal("0.04")
+    assert 结果.最大开放初始风险比例 == Decimal("0.052")
+    assert set(结果.失败原因) == {"单笔初始风险超过候选上限", "开放初始风险超过上限"}
+
+
+def test_风险限额重演把超过五百分比的单笔风险标为绝对失败() -> None:
+    结果 = 重演风险限额([
+        风险限额快照("2025.01.01 01:00:00", Decimal("300"), Decimal("15.01"), Decimal("15.01")),
+    ])
+
+    assert set(结果.失败原因) == {
+        "单笔初始风险超过候选上限",
+        "单笔初始风险超过绝对上限",
+        "开放初始风险超过上限",
+    }
 
 
 def test_逐tick日内权益回放捕获盘中亏损后盈利的十百分比越界() -> None:
