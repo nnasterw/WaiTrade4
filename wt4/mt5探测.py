@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 import os
 from pathlib import Path
+import re
 
 
 @dataclass(frozen=True)
@@ -40,7 +41,7 @@ def 生成MT5探测配置(配置: MT5短窗口探测配置, 暂存目录: Path) 
     if 配置.参数文件路径 is not None and not 配置.参数文件路径.is_file():
         raise ValueError(f"MT5 探测参数文件不存在: {配置.参数文件路径}")
 
-    报告路径 = _mac路径转WineZ盘(暂存目录 / "报告.html")
+    报告名称 = "wt4-" + re.sub(r"[^A-Za-z0-9_-]", "-", 暂存目录.name)
     内容 = f"""; wt4 单实例能力探测。不可作为策略验收结论。
 [Common]
 Login={配置.登录账号}
@@ -63,7 +64,7 @@ Currency=USD
 Leverage={配置.杠杆}
 ExecutionMode=0
 ShutdownTerminal=1
-Report={报告路径}
+Report={报告名称}
 """
     路径 = 暂存目录 / "mt5-探测.ini"
     路径.write_text(内容, encoding="utf-8")

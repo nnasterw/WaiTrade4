@@ -38,8 +38,12 @@ def test_探测配置强制真实点和代理且报告写入本次暂存目录(t
     assert "ProxyAddress=127.0.0.1:7897" in 内容
     assert "Model=4" in 内容
     assert "Deposit=300" in 内容
-    assert "Report=Z:\\" in 内容
-    assert "报告.html" in 内容
+    assert "FromDate=2026.05.01" in 内容
+    assert "ToDate=2026.05.02" in 内容
+    assert "DateFrom=" not in 内容
+    assert "DateTo=" not in 内容
+    assert "Report=wt4-" in 内容
+    assert "报告.html" not in 内容
     assert "ShutdownTerminal=1" in 内容
 
 

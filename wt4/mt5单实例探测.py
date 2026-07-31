@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from hashlib import sha256
 from pathlib import Path
+import re
 from typing import Mapping
 
 from wt4.experiment import 实验输入
@@ -23,16 +24,35 @@ def 解析MT5生命周期(日志证据: str) -> dict[str, object]:
         )
         if 标记 in 小写日志
     )
-    已启动 = "tester automatical testing started" in 小写日志
-    已成功 = 'tester last test passed with result "successfully finished"' in 小写日志
-    已退出 = "terminal exit with code 0" in 小写日志
+    已启动 = bool(re.search(r"tester\s+automatical testing started", 小写日志))
+    已成功 = bool(re.search(r'tester\s+last test passed with result "successfully finished"', 小写日志))
+    已退出 = bool(re.search(r"terminal\s+exit with code 0", 小写日志))
+    历史数据不可用 = tuple(
+        标记
+        for 标记 in (
+            "history check timeout",
+            "preliminary downloading of history ticks canceled",
+            "no history data, stop testing",
+        )
+        if 标记 in 小写日志
+    )
     return {
         "已启动": 已启动,
         "已成功": 已成功,
         "已退出": 已退出,
         "失败标记": list(失败标记),
+        "历史数据不可用标记": list(历史数据不可用),
         "完整": 已启动 and 已成功 and 已退出 and not 失败标记,
     }
+
+
+def 解析MT5实际测试区间(日志证据: str) -> tuple[str, str] | None:
+    """从本轮 Agent 日志提取 Tester 实际执行区间，不能只信任 INI。"""
+    匹配 = re.search(
+        r"testing .*? from (\d{4}\.\d{2}\.\d{2}) 00:00 to (\d{4}\.\d{2}\.\d{2}) 00:00 started",
+        日志证据.lower(),
+    )
+    return (匹配.group(1), 匹配.group(2)) if 匹配 else None
 
 
 class 单实例MT5探测执行器:
@@ -57,14 +77,15 @@ class 单实例MT5探测执行器:
         self.超时秒数 = 超时秒数
 
     def 执行(self, 输入: 实验输入, 暂存目录: Path) -> 执行结果:
-        参数证据 = self._复制参数文件(暂存目录)
         运行配置 = 生成MT5探测配置(self.探测配置, 暂存目录)
+        报告名称 = self._配置报告名称(运行配置)
         受监控目录 = self._受监控目录()
         运行前 = 共享状态快照.创建(受监控目录)
         运行前日志 = self._日志字节快照()
         (暂存目录 / "共享状态-运行前.json").write_text(
             json.dumps(运行前.文件, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8"
         )
+        参数证据, 实际参数路径 = self._准备参数输入(暂存目录)
 
         命令 = (
             str(self.Wine命令),
@@ -75,10 +96,13 @@ class 单实例MT5探测执行器:
             MT5回测配置(
                 命令=命令,
                 超时秒数=self.超时秒数,
-                预期工件=("报告.html",),
+                # MT5 将 Report 写到共享终端根目录；待进程退出后再按唯一
+                # 报告名收集进本轮暂存目录，因此此处只能核验同步执行日志。
+                预期工件=("执行日志.txt",),
                 环境变量={"WINEPREFIX": str(self.Wine前缀)},
             )
         ).执行(输入, 暂存目录)
+        报告证据 = self._收集MT5报告(报告名称, 暂存目录)
 
         运行后 = 共享状态快照.创建(受监控目录)
         差异 = 运行前.比较(运行后)
@@ -86,17 +110,44 @@ class 单实例MT5探测执行器:
             json.dumps(差异, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8"
         )
         日志证据 = self._保留本次日志证据(暂存目录, 运行前日志)
-        生命周期 = 解析MT5生命周期((暂存目录 / 日志证据).read_text(encoding="utf-8"))
+        日志文本 = (暂存目录 / 日志证据).read_text(encoding="utf-8")
+        生命周期 = 解析MT5生命周期(日志文本)
+        实际测试区间 = 解析MT5实际测试区间(日志文本)
         工件 = dict(结果.工件)
-        for 名称 in ("mt5-探测.ini", "共享状态-运行前.json", "共享状态差异.json", 日志证据, *参数证据):
+        if not 报告证据:
+            return 执行结果(
+                结果.状态.执行无效,
+                {},
+                {**结果.结果, "原因": "缺少 MT5 工件", "缺失": ["报告.html"]},
+            )
+        for 名称 in ("mt5-探测.ini", "共享状态-运行前.json", "共享状态差异.json", 日志证据, *参数证据, *报告证据):
             路径 = 暂存目录 / 名称
             工件[名称] = 隔离MT5执行器._哈希(路径)
         结果数据 = {
             **结果.结果,
             "共享状态差异": 差异,
             "MT5生命周期": 生命周期,
+            "MT5实际测试区间": 实际测试区间,
             "参数输入证据哈希": self._参数文件哈希(参数证据, 暂存目录),
+            "MT5实际参数路径": str(实际参数路径) if 实际参数路径 else None,
         }
+        if 生命周期["历史数据不可用标记"]:
+            return 执行结果(
+                结果.状态.数据无效,
+                {},
+                {**结果数据, "原因": "MT5 历史数据不可用"},
+            )
+        期望测试区间 = (self.探测配置.开始日, self.探测配置.结束日)
+        if 实际测试区间 != 期望测试区间:
+            return 执行结果(
+                结果.状态.执行无效,
+                {},
+                {
+                    **结果数据,
+                    "原因": "MT5 日期参数未按声明区间生效",
+                    "期望测试区间": 期望测试区间,
+                },
+            )
         if 结果.状态.value == "已归档" and not 生命周期["完整"]:
             return 执行结果(
                 结果.状态.执行无效,
@@ -105,16 +156,57 @@ class 单实例MT5探测执行器:
             )
         return 执行结果(结果.状态, 工件, 结果数据)
 
-    def _复制参数文件(self, 暂存目录: Path) -> tuple[str, ...]:
-        """封存调用方声明的参数输入副本，供后续与 MT5 实际加载路径交叉核验。"""
+    @staticmethod
+    def _配置报告名称(运行配置: Path) -> str:
+        for 行 in 运行配置.read_text(encoding="utf-8").splitlines():
+            if 行.startswith("Report="):
+                名称 = 行.removeprefix("Report=")
+                if re.fullmatch(r"wt4-[A-Za-z0-9_-]+", 名称):
+                    return 名称
+        raise ValueError("MT5 探测配置缺少安全的 Report 名称")
+
+    def _收集MT5报告(self, 报告名称: str, 暂存目录: Path) -> tuple[str, ...]:
+        """将 MT5 实际输出目录中的唯一 HTML 报告封存到本轮暂存目录。"""
+        候选 = [
+            路径 for 路径 in self.探测配置.终端目录.glob(f"{报告名称}.*")
+            if 路径.is_file() and not 路径.is_symlink() and 路径.suffix.lower() in {".htm", ".html"}
+        ]
+        if len(候选) > 1:
+            raise ValueError(f"MT5 输出了多个同名报告，拒绝选择: {候选}")
+        if not 候选:
+            return ()
+        目标 = 暂存目录 / "报告.html"
+        if 目标.exists():
+            raise ValueError("报告封存目标已存在")
+        目标.write_bytes(候选[0].read_bytes())
+        return (目标.name,)
+
+    def _准备参数输入(self, 暂存目录: Path) -> tuple[tuple[str, ...], Path | None]:
+        """封存并以唯一名称写入 Tester 的实际 ExpertParameters 查找目录。
+
+        MT5 的 ``ExpertParameters`` 只接受文件名，会从 Tester 的
+        ``MQL5/Profiles/Tester`` 读取。因此仅在暂存目录复制参数并不能
+        证明实际加载；这里拒绝覆盖既有文件，并把目标目录纳入状态快照。
+        """
         来源 = self.探测配置.参数文件路径
         if 来源 is None:
-            return ()
+            return (), None
+        if Path(self.探测配置.参数文件).name != self.探测配置.参数文件:
+            raise ValueError("ExpertParameters 必须是无目录的唯一文件名")
+        if 来源.name != self.探测配置.参数文件:
+            raise ValueError("声明参数文件名必须与 ExpertParameters 完全一致")
         目标目录 = 暂存目录 / "mt5-input"
         目标目录.mkdir()
         目标 = 目标目录 / 来源.name
         目标.write_bytes(来源.read_bytes())
-        return (目标.relative_to(暂存目录).as_posix(),)
+
+        实际目录 = self.探测配置.终端目录 / "MQL5/Profiles/Tester"
+        实际目录.mkdir(parents=True, exist_ok=True)
+        实际路径 = 实际目录 / 来源.name
+        if 实际路径.exists():
+            raise ValueError(f"拒绝覆盖 Tester 既有参数文件: {实际路径}")
+        实际路径.write_bytes(来源.read_bytes())
+        return (目标.relative_to(暂存目录).as_posix(),), 实际路径
 
     @staticmethod
     def _参数文件哈希(参数证据: tuple[str, ...], 暂存目录: Path) -> str | None:
@@ -130,6 +222,7 @@ class 单实例MT5探测执行器:
             根目录 / "Tester" / "logs",
             根目录 / "Tester" / "Agent-127.0.0.1-3000" / "logs",
             根目录 / "reports",
+            根目录 / "MQL5" / "Profiles" / "Tester",
         ]
 
     @staticmethod
