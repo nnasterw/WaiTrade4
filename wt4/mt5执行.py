@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
+import os
 from pathlib import Path
+import signal
 import subprocess
-from typing import Sequence
 
 from wt4.experiment import 实验输入
 from wt4.编排 import 实验状态, 执行结果
@@ -35,21 +36,27 @@ class 隔离MT5执行器:
 
     def 执行(self, 输入: 实验输入, 暂存目录: Path) -> 执行结果:
         日志 = 暂存目录 / "执行日志.txt"
+        进程 = subprocess.Popen(
+            self.配置.命令,
+            cwd=暂存目录,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=os.name == "posix",
+        )
         try:
-            进程 = subprocess.run(
-                self.配置.命令,
-                cwd=暂存目录,
-                capture_output=True,
-                text=True,
-                timeout=self.配置.超时秒数,
-                check=False,
+            标准输出, 标准错误 = 进程.communicate(timeout=self.配置.超时秒数)
+        except subprocess.TimeoutExpired:
+            self._终止受控进程组(进程)
+            标准输出, 标准错误 = 进程.communicate()
+            日志.write_text(
+                self._执行日志(进程.returncode, 标准输出, 标准错误, 超时=True),
+                encoding="utf-8",
             )
-        except subprocess.TimeoutExpired as 异常:
-            日志.write_text(self._超时日志(异常), encoding="utf-8")
             return 执行结果(实验状态.执行无效, {}, {"原因": "MT5 执行超时"})
 
         日志.write_text(
-            f"返回码={进程.returncode}\n--- stdout ---\n{进程.stdout}\n--- stderr ---\n{进程.stderr}",
+            self._执行日志(进程.returncode, 标准输出, 标准错误),
             encoding="utf-8",
         )
         if 进程.returncode != 0:
@@ -79,11 +86,13 @@ class 隔离MT5执行器:
         return sha256(路径.read_bytes()).hexdigest()
 
     @staticmethod
-    def _超时日志(异常: subprocess.TimeoutExpired) -> str:
-        标准输出 = 异常.stdout or ""
-        标准错误 = 异常.stderr or ""
-        if isinstance(标准输出, bytes):
-            标准输出 = 标准输出.decode(errors="replace")
-        if isinstance(标准错误, bytes):
-            标准错误 = 标准错误.decode(errors="replace")
-        return f"超时命令={异常.cmd}\n--- stdout ---\n{标准输出}\n--- stderr ---\n{标准错误}"
+    def _终止受控进程组(进程: subprocess.Popen[str]) -> None:
+        if os.name == "posix":
+            os.killpg(进程.pid, signal.SIGTERM)
+        else:
+            进程.terminate()
+
+    @staticmethod
+    def _执行日志(返回码: int | None, 标准输出: str, 标准错误: str, 超时: bool = False) -> str:
+        前缀 = "执行超时\n" if 超时 else ""
+        return f"{前缀}返回码={返回码}\n--- stdout ---\n{标准输出}\n--- stderr ---\n{标准错误}"

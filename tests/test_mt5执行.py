@@ -37,3 +37,14 @@ def test_命令成功但缺失报告仍为执行无效(tmp_path) -> None:
 
     assert 结果.状态 is 实验状态.执行无效
     assert 结果.结果["缺失"] == ["报告.html"]
+
+
+def test_超时被记录为执行无效且保存日志(tmp_path) -> None:
+    执行器 = 隔离MT5执行器(
+        MT5回测配置((sys.executable, "-c", "import time; time.sleep(10)"), 1, ("报告.html",))
+    )
+
+    结果 = 执行器.执行(_输入(), tmp_path)
+
+    assert 结果.状态 is 实验状态.执行无效
+    assert "执行超时" in (tmp_path / "执行日志.txt").read_text(encoding="utf-8")
