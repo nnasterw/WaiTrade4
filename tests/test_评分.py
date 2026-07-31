@@ -2,8 +2,21 @@ from __future__ import annotations
 
 from dataclasses import replace
 from decimal import Decimal
+from hashlib import sha256
+import json
+from pathlib import Path
 
-from wt4.评分 import 基线样本, 校准评分标尺, 评分原料, 生成评分卡
+import pytest
+
+from wt4.experiment import 实验输入
+from wt4.评分 import (
+    从已归档实验构造基线样本,
+    基线样本,
+    校准评分标尺,
+    评分原料,
+    生成评分卡,
+)
+from wt4.账本 import 追加式账本
 from wt4.验收 import 硬门槛结果
 
 
@@ -116,3 +129,67 @@ def test_未通过验收硬门的基线和候选不得得到排序状态() -> No
     卡 = 生成评分卡(_原料(5), 标尺)
     assert 卡.最高状态 == "观察"
     assert "验收硬门未通过" in 卡.等级限制原因
+
+
+def _正式基线输入(编号: int, *, 正式策略验收: bool = True) -> 实验输入:
+    return 实验输入(
+        策略实现提交=f"baseline-{编号}", 二进制哈希="a" * 64, 参数={},
+        数据指纹="data", 成本快照="cost", 合约规格="BTCUSDm",
+        mt5版本="MT5", 建模方式=4, 起始日="2024-01-01",
+        结束日="2024-06-30", 分区="正式验收", 正式策略验收=正式策略验收,
+        交易品种="BTCUSDm", 初始资金="300",
+    )
+
+
+def _封存评分基线(
+    tmp_path: Path, 编号: int = 1, *, 正式策略验收: bool = True,
+) -> tuple[追加式账本, Path, 实验输入]:
+    账本 = 追加式账本(tmp_path / "账本.sqlite")
+    输入 = _正式基线输入(编号, 正式策略验收=正式策略验收)
+    工件根目录 = tmp_path / "工件"
+    工件目录 = 工件根目录 / 输入.身份
+    工件目录.mkdir(parents=True)
+    验收结果 = {
+        "评分基线": {
+            "版本": 1,
+            "验收硬门通过": True,
+            "原料": {
+                "样本外净收益": "10", "压力净收益": "2", "成本保留率": "0.5",
+                "最大回撤": "0.1", "最大单笔贡献": "0.2",
+                "移除最佳月后压力期望": "1", "月度正收益比例": "0.6",
+                "证据完整": True, "订单异常数": 0,
+            },
+        }
+    }
+    (工件目录 / "验收结果.json").write_text(json.dumps(验收结果, ensure_ascii=False), encoding="utf-8")
+    哈希 = {"验收结果.json": sha256((工件目录 / "验收结果.json").read_bytes()).hexdigest()}
+    (工件目录 / "工件清单.json").write_text(
+        json.dumps({"版本": 1, "工件哈希": 哈希}, ensure_ascii=False, sort_keys=True), encoding="utf-8"
+    )
+    账本哈希 = {**哈希, "工件清单.json": sha256((工件目录 / "工件清单.json").read_bytes()).hexdigest()}
+    账本.追加(输入.身份, "已创建", {"输入": json.loads(输入.规范内容())})
+    账本.追加(输入.身份, "已归档", {"工件目录": str(工件目录.resolve()), "工件哈希": 账本哈希})
+    return 账本, 工件根目录, 输入
+
+
+def test_评分基线只能从正式验收的账本归档及哈希构造(tmp_path: Path) -> None:
+    账本, 工件根目录, 输入 = _封存评分基线(tmp_path)
+
+    样本 = 从已归档实验构造基线样本(账本, 工件根目录, 输入.身份)
+
+    assert 样本.实验身份 == 输入.身份
+    assert 样本.硬门结果.通过
+    assert 样本.原料.样本外净收益 == Decimal("10")
+
+
+def test_评分基线拒绝归档工件被篡改或非正式验收(tmp_path: Path) -> None:
+    账本, 工件根目录, 输入 = _封存评分基线(tmp_path)
+    (工件根目录 / 输入.身份 / "验收结果.json").write_text("{}", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="哈希"):
+        从已归档实验构造基线样本(账本, 工件根目录, 输入.身份)
+
+    账本, 工件根目录, 输入 = _封存评分基线(tmp_path / "非正式", 2, 正式策略验收=False)
+
+    with pytest.raises(ValueError, match="正式策略验收"):
+        从已归档实验构造基线样本(账本, 工件根目录, 输入.身份)

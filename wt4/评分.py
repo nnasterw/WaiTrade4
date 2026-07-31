@@ -4,8 +4,10 @@ from dataclasses import dataclass
 from decimal import Decimal
 from hashlib import sha256
 import json
+from pathlib import Path
 from typing import Any
 
+from wt4.账本 import 追加式账本
 from wt4.验收 import 硬门槛结果
 
 
@@ -50,6 +52,110 @@ class 评分标尺:
     基线身份: tuple[str, ...]
     标尺身份: str
     三档分界: dict[str, tuple[Decimal, Decimal]]
+
+
+def 从已归档实验构造基线样本(
+    账本: 追加式账本,
+    工件根目录: Path,
+    实验身份: str,
+) -> 基线样本:
+    """从不可变账本与封存工件读取一个可用于校准的正式验收基线。
+
+    校准入口不接受调用者临时拼装的原料；必须能从账本的已创建输入、
+    已归档事件、工件清单和验收结果逐一回溯。这样即使真实代表性池尚未
+    跑完，也不会把内存样本误当成生产标尺的来源。
+    """
+    if not 实验身份:
+        raise ValueError("基线实验身份不能为空")
+    事件 = 账本.事件(实验身份)
+    if len(事件) < 2 or 事件[0].类型 != "已创建" or 事件[-1].类型 != "已归档":
+        raise ValueError("评分基线必须具有已创建和已归档账本终态")
+    输入 = 事件[0].内容.get("输入")
+    if not isinstance(输入, dict):
+        raise ValueError("评分基线缺少不可变实验输入")
+    计算身份 = sha256(
+        json.dumps(输入, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    if 计算身份 != 实验身份:
+        raise ValueError("评分基线账本输入与实验身份不一致")
+    if not (
+        输入.get("正式策略验收") is True
+        and 输入.get("交易品种") == "BTCUSDm"
+        and 输入.get("合约规格") == "BTCUSDm"
+        and 输入.get("初始资金") == "300"
+        and 输入.get("建模方式") == 4
+    ):
+        raise ValueError("评分基线必须来自 BTCUSDm 正式策略验收")
+
+    工件目录 = (工件根目录 / 实验身份).resolve()
+    if 工件目录.parent != 工件根目录.resolve() or not 工件目录.is_dir():
+        raise ValueError("评分基线归档目录不存在或越界")
+    已归档目录 = 事件[-1].内容.get("工件目录")
+    if 已归档目录 != str(工件目录):
+        raise ValueError("账本归档目录与评分基线工件目录不一致")
+
+    清单文件 = 工件目录 / "工件清单.json"
+    验收文件 = 工件目录 / "验收结果.json"
+    if not 清单文件.is_file() or not 验收文件.is_file():
+        raise ValueError("评分基线缺少工件清单或验收结果")
+    try:
+        清单 = json.loads(清单文件.read_text(encoding="utf-8"))
+        验收结果 = json.loads(验收文件.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as 异常:
+        raise ValueError("评分基线工件不是有效 JSON") from 异常
+    哈希 = 清单.get("工件哈希") if isinstance(清单, dict) else None
+    账本哈希 = 事件[-1].内容.get("工件哈希")
+    清单哈希 = sha256(清单文件.read_bytes()).hexdigest()
+    if (
+        not isinstance(哈希, dict)
+        or not isinstance(账本哈希, dict)
+        or 账本哈希.get("工件清单.json") != 清单哈希
+        or {名称: 值 for 名称, 值 in 账本哈希.items() if 名称 != "工件清单.json"} != 哈希
+    ):
+        raise ValueError("评分基线工件清单与账本哈希不一致")
+    声明路径: set[Path] = set()
+    for 名称, 期望哈希 in 哈希.items():
+        相对路径 = Path(名称) if isinstance(名称, str) else None
+        if (
+            相对路径 is None
+            or 相对路径.is_absolute()
+            or ".." in 相对路径.parts
+            or not isinstance(期望哈希, str)
+        ):
+            raise ValueError("评分基线工件哈希格式无效")
+        路径 = 工件目录 / 相对路径
+        if not 路径.is_file() or 路径.is_symlink():
+            raise ValueError("评分基线工件清单包含越界或缺失文件")
+        if sha256(路径.read_bytes()).hexdigest() != 期望哈希:
+            raise ValueError("评分基线工件哈希不匹配")
+        声明路径.add(相对路径)
+    实际路径 = {路径.relative_to(工件目录) for 路径 in 工件目录.rglob("*") if 路径.is_file()}
+    if 实际路径 != 声明路径 | {Path("工件清单.json")}:
+        raise ValueError("评分基线工件与清单不一致")
+
+    基线 = 验收结果.get("评分基线") if isinstance(验收结果, dict) else None
+    原料内容 = 基线.get("原料") if isinstance(基线, dict) else None
+    if not isinstance(基线, dict) or 基线.get("版本") != 1 or not isinstance(原料内容, dict):
+        raise ValueError("评分基线缺少版本化评分原料")
+    if 基线.get("验收硬门通过") is not True:
+        raise ValueError("评分基线验收硬门未通过")
+    try:
+        原料 = 评分原料(
+            样本外净收益=Decimal(str(原料内容["样本外净收益"])),
+            压力净收益=Decimal(str(原料内容["压力净收益"])),
+            成本保留率=Decimal(str(原料内容["成本保留率"])),
+            最大回撤=Decimal(str(原料内容["最大回撤"])),
+            最大单笔贡献=Decimal(str(原料内容["最大单笔贡献"])),
+            移除最佳月后压力期望=Decimal(str(原料内容["移除最佳月后压力期望"])),
+            月度正收益比例=Decimal(str(原料内容["月度正收益比例"])),
+            证据完整=原料内容["证据完整"],
+            订单异常数=原料内容["订单异常数"],
+        )
+    except (KeyError, ArithmeticError, ValueError) as 异常:
+        raise ValueError("评分基线原料格式无效") from 异常
+    if not isinstance(原料.证据完整, bool) or not isinstance(原料.订单异常数, int) or isinstance(原料.订单异常数, bool):
+        raise ValueError("评分基线证据或订单异常字段无效")
+    return 基线样本(实验身份, 原料, 硬门槛结果([]))
 
 
 _评分指标 = (
