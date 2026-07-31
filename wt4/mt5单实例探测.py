@@ -8,13 +8,20 @@ import re
 import socket
 import ssl
 import struct
+import shutil
 from typing import Mapping
 from datetime import datetime
 
 from wt4.experiment import 实验输入
 from wt4.mt5执行 import MT5回测配置, 隔离MT5执行器
-from wt4.mt5探测 import MT5短窗口探测配置, 共享状态快照, 生成MT5探测配置
-from wt4.编排 import 执行结果
+from wt4.mt5探测 import (
+    MT5短窗口探测配置,
+    共享状态快照,
+    写入MT5持久SOCKS5配置,
+    生成MT5探测配置,
+    核验MT5持久SOCKS5配置,
+)
+from wt4.编排 import 实验状态, 执行结果
 
 
 def 解析MT5连接端点(日志证据: str) -> tuple[str, ...]:
@@ -401,10 +408,23 @@ class 单实例MT5探测执行器:
         self.超时秒数 = 超时秒数
         self.Mihomo日志路径 = Mihomo日志路径
         self.离线代理隔离 = 离线代理隔离
+        self.沙箱命令 = shutil.which("sandbox-exec")
+        if self.沙箱命令 is None:
+            raise ValueError("缺少 sandbox-exec，无法建立 MT5 禁止直连边界")
 
     def 执行(self, 输入: 实验输入, 暂存目录: Path) -> 执行结果:
         代理观测开始 = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         运行配置 = 生成MT5探测配置(self.探测配置, 暂存目录)
+        持久代理配置 = 写入MT5持久SOCKS5配置(self.探测配置)
+        持久代理失败 = 核验MT5持久SOCKS5配置(持久代理配置, self.探测配置.代理地址)
+        if 持久代理失败:
+            return 执行结果(
+                实验状态.执行无效,
+                {},
+                {"原因": "MT5 持久 SOCKS5 配置未生效", "失败": 持久代理失败},
+            )
+        持久代理证据 = 暂存目录 / "mt5-持久代理.ini"
+        持久代理证据.write_bytes(持久代理配置.read_bytes())
         报告名称 = self._配置报告名称(运行配置)
         受监控目录 = self._受监控目录()
         运行前 = 共享状态快照.创建(受监控目录)
@@ -415,6 +435,9 @@ class 单实例MT5探测执行器:
         参数证据, 实际参数路径 = self._准备参数输入(暂存目录)
 
         命令 = (
+            self.沙箱命令,
+            "-p",
+            self._禁止直连沙箱配置(),
             str(self.Wine命令),
             r"C:\Program Files\MetaTrader 5 Tester\terminal64.exe",
             f"/config:{self._mac路径转WineZ盘(运行配置)}",
@@ -448,6 +471,9 @@ class 单实例MT5探测执行器:
             "共享状态差异": 差异,
             "MT5生命周期": 生命周期,
             "MT5代理同步诊断": 代理同步诊断,
+            "MT5持久SOCKS5配置": str(持久代理配置),
+            "MT5持久SOCKS5配置失败": 持久代理失败,
+            "网络隔离": "sandbox-exec: 仅允许 localhost TCP；外网只能经 SOCKS5 转发",
             "Mihomo时间窗口候选": self._收集Mihomo时间窗口候选(代理观测开始, 代理观测结束),
             "MT5实际测试区间": 实际测试区间,
             "参数输入证据哈希": self._参数文件哈希(参数证据, 暂存目录),
@@ -459,7 +485,7 @@ class 单实例MT5探测执行器:
                 {},
                 {**结果数据, "原因": "缺少 MT5 工件", "缺失": ["报告.html"]},
             )
-        for 名称 in ("mt5-探测.ini", "共享状态-运行前.json", "共享状态差异.json", 日志证据, *参数证据, *报告证据):
+        for 名称 in ("mt5-探测.ini", "mt5-持久代理.ini", "共享状态-运行前.json", "共享状态差异.json", 日志证据, *参数证据, *报告证据):
             路径 = 暂存目录 / 名称
             工件[名称] = 隔离MT5执行器._哈希(路径)
         if 生命周期["历史数据不可用标记"]:
@@ -582,6 +608,7 @@ class 单实例MT5探测执行器:
             根目录 / "Tester" / "cache",
             根目录 / "Tester" / "logs",
             根目录 / "Tester" / "Agent-127.0.0.1-3000" / "logs",
+            根目录 / "config",
             根目录 / "reports",
             根目录 / "MQL5" / "Profiles" / "Tester",
         ]
@@ -589,6 +616,19 @@ class 单实例MT5探测执行器:
     @staticmethod
     def _mac路径转WineZ盘(路径: Path) -> str:
         return "Z:\\" + str(路径.resolve()).lstrip("/").replace("/", "\\")
+
+    @staticmethod
+    def _禁止直连沙箱配置() -> str:
+        """保留本地 Tester Agent 通信，拒绝所有外部 TCP。
+
+        SOCKS5 的远端连接由 Mihomo 进程建立，而不是由受限的 Wine/MT5
+        子进程建立。因此 MT5 只能访问环回代理与本地 Agent；配置失效时
+        任何直连外网都会被 macOS Sandbox 拒绝。
+        """
+        return (
+            '(version 1) (allow default) (deny network-outbound) '
+            '(allow network-outbound (remote unix-socket) (remote tcp "localhost:*"))'
+        )
 
     def _日志字节快照(self) -> dict[str, bytes]:
         """按受监控根目录保留日志字节，供执行后仅提取本轮新增片段。"""

@@ -3,7 +3,13 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from wt4.mt5探测 import MT5短窗口探测配置, 共享状态快照, 生成MT5探测配置
+from wt4.mt5探测 import (
+    MT5短窗口探测配置,
+    共享状态快照,
+    写入MT5持久SOCKS5配置,
+    生成MT5探测配置,
+    核验MT5持久SOCKS5配置,
+)
 
 
 def _配置(tmp_path: Path) -> MT5短窗口探测配置:
@@ -94,6 +100,36 @@ def test_探测配置拒绝不存在的显式参数文件(tmp_path) -> None:
         assert "参数文件不存在" in str(异常)
     else:
         raise AssertionError("应拒绝不存在的显式参数文件")
+
+
+def test_持久代理配置强制启用SOCKS5并可复核(tmp_path) -> None:
+    配置 = _配置(tmp_path)
+    配置目录 = 配置.终端目录 / "config"
+    配置目录.mkdir(parents=True)
+    路径 = 配置目录 / "common.ini"
+    路径.write_text(
+        "[Common]\r\nLogin=277656700\r\nProxyEnable=0\r\nProxyType=0\r\nProxyAddress=127.0.0.1:7897\r\n",
+        encoding="utf-16",
+    )
+
+    assert 写入MT5持久SOCKS5配置(配置) == 路径
+    assert 核验MT5持久SOCKS5配置(路径, "127.0.0.1:7897") == []
+    内容 = 路径.read_bytes().decode("utf-16")
+    assert "ProxyEnable=1" in 内容
+
+
+def test_持久代理配置拒绝缺少字段(tmp_path) -> None:
+    配置 = _配置(tmp_path)
+    配置目录 = 配置.终端目录 / "config"
+    配置目录.mkdir(parents=True)
+    (配置目录 / "common.ini").write_text("[Common]\r\nProxyEnable=0\r\n", encoding="utf-16")
+
+    try:
+        写入MT5持久SOCKS5配置(配置)
+    except ValueError as 异常:
+        assert "ProxyType" in str(异常)
+    else:
+        raise AssertionError("应拒绝字段不完整的持久代理配置")
 
 
 def test_共享状态快照能识别新增修改和删除(tmp_path) -> None:

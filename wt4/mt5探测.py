@@ -5,6 +5,7 @@ from hashlib import sha256
 import os
 from pathlib import Path
 import re
+import tempfile
 
 
 @dataclass(frozen=True)
@@ -76,6 +77,61 @@ Report={报告名称}
     路径 = 暂存目录 / "mt5-探测.ini"
     路径.write_text(内容, encoding="utf-8")
     return 路径
+
+
+def 写入MT5持久SOCKS5配置(配置: MT5短窗口探测配置) -> Path:
+    """把代理写入 Tester 实际读取的 ``config/common.ini``。
+
+    macOS/Wine 版 Tester 会保留自己的 UTF-16 ``common.ini``；单次
+    ``/config:`` 文件中的 ``[Common]`` 不能可靠覆盖它。必须在启动前
+    同时写入此持久配置，且只允许 SOCKS5。
+    """
+    if 配置.代理类型 != 0 or not 配置.代理地址:
+        raise ValueError("MT5 持久代理配置仅允许显式 SOCKS5 地址")
+    路径 = 配置.终端目录 / "config" / "common.ini"
+    if not 路径.is_file():
+        raise ValueError(f"MT5 持久代理配置不存在: {路径}")
+    原始内容 = 路径.read_bytes()
+    try:
+        内容 = 原始内容.decode("utf-16")
+        编码 = "utf-16"
+    except UnicodeDecodeError as 异常:
+        raise ValueError(f"MT5 持久代理配置不是 UTF-16: {路径}") from 异常
+
+    for 键, 值 in (("ProxyEnable", "1"), ("ProxyType", "0"), ("ProxyAddress", 配置.代理地址)):
+        内容, 替换数 = re.subn(rf"(?m)^{键}=.*$", f"{键}={值}", 内容)
+        if 替换数 != 1:
+            raise ValueError(f"MT5 持久代理配置字段异常: {键}={替换数}")
+
+    临时文件 = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=路径.parent, delete=False) as 文件:
+            临时文件 = Path(文件.name)
+            文件.write(内容.encode(编码))
+        临时文件.replace(路径)
+    finally:
+        if 临时文件 is not None and 临时文件.exists():
+            临时文件.unlink()
+    return 路径
+
+
+def 核验MT5持久SOCKS5配置(配置路径: Path, 期望代理地址: str) -> list[str]:
+    """读取 MT5 实际持久配置，不允许以启动 INI 代替。"""
+    if not 配置路径.is_file():
+        return ["MT5 持久代理配置缺失"]
+    try:
+        内容 = 配置路径.read_bytes().decode("utf-16")
+    except UnicodeDecodeError:
+        return ["MT5 持久代理配置编码无效"]
+    字段 = dict(re.findall(r"(?m)^(ProxyEnable|ProxyType|ProxyAddress)=(.*)$", 内容))
+    失败: list[str] = []
+    if 字段.get("ProxyEnable") != "1":
+        失败.append("MT5 持久代理未启用")
+    if 字段.get("ProxyType") != "0":
+        失败.append("MT5 持久代理不是 SOCKS5")
+    if 字段.get("ProxyAddress") != 期望代理地址:
+        失败.append("MT5 持久代理地址不匹配")
+    return 失败
 
 
 def _mac路径转WineZ盘(路径: Path) -> str:

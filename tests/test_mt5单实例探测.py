@@ -27,9 +27,13 @@ def _输入() -> 实验输入:
 
 def _配置与目录(tmp_path: Path) -> tuple[MT5短窗口探测配置, Path, Path, Path]:
     终端 = tmp_path / "MetaTrader 5 Tester"
-    for 相对目录 in ("logs", "Tester/cache", "Tester/logs", "Tester/Agent-127.0.0.1-3000/logs", "reports", "MQL5/Profiles/Tester"):
+    for 相对目录 in ("logs", "Tester/cache", "Tester/logs", "Tester/Agent-127.0.0.1-3000/logs", "reports", "MQL5/Profiles/Tester", "config"):
         (终端 / 相对目录).mkdir(parents=True)
     (终端 / "terminal64.exe").write_bytes(b"")
+    (终端 / "config/common.ini").write_text(
+        "[Common]\r\nProxyEnable=0\r\nProxyType=0\r\nProxyAddress=127.0.0.1:7897\r\n",
+        encoding="utf-16",
+    )
     wine = tmp_path / "wine"
     wine.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     wine.chmod(0o755)
@@ -51,12 +55,16 @@ def test_探测会保留共享状态前后证据即使报告缺失(tmp_path) -> 
 
     assert 结果.状态 is 实验状态.执行无效
     assert (暂存 / "mt5-探测.ini").is_file()
+    assert (暂存 / "mt5-持久代理.ini").is_file()
+    assert (暂存 / "mt5-持久代理.ini").read_bytes().decode("utf-16").count("ProxyEnable=1") == 1
     assert (暂存 / "共享状态-运行前.json").is_file()
     assert (暂存 / "共享状态差异.json").is_file()
     assert (暂存 / "MT5日志证据.txt").read_text(encoding="utf-8") == ""
     assert json.loads((暂存 / "共享状态差异.json").read_text(encoding="utf-8")) == {"删除": [], "修改": [], "新增": []}
     assert 结果.结果["MT5生命周期"]["交易服务器未同步标记"] == []
     assert 结果.结果["MT5代理同步诊断"]["结论"] == "未发现SOCKS5连接证据"
+    assert 结果.结果["网络隔离"] == "sandbox-exec: 仅允许 localhost TCP；外网只能经 SOCKS5 转发"
+    assert 结果.结果["MT5持久SOCKS5配置失败"] == []
 
 
 def test_报告缺失时仍返回代理和交易服务器同步诊断(tmp_path) -> None:
