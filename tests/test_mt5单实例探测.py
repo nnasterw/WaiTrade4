@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from wt4.experiment import 实验输入
@@ -18,7 +19,7 @@ from wt4.mt5单实例探测 import (
     通过SOCKS5探测端点,
 )
 from wt4.mt5探测 import MT5短窗口探测配置
-from wt4.编排 import 实验状态
+from wt4.编排 import 执行结果, 实验状态
 
 
 def _输入() -> 实验输入:
@@ -65,6 +66,9 @@ def test_探测会保留共享状态前后证据即使报告缺失(tmp_path) -> 
     assert 结果.结果["MT5代理同步诊断"]["结论"] == "未发现SOCKS5连接证据"
     assert 结果.结果["网络隔离"] == "sandbox-exec: 仅允许 localhost TCP；外网只能经 SOCKS5 转发"
     assert 结果.结果["MT5持久SOCKS5配置失败"] == []
+    # 此桩命令在启动前即退出，不会生成后台执行工件；执行器不得为不
+    # 存在的文件声明哈希。真实超时路径的后台工件由隔离执行器负责生成。
+    assert not {"后台-stdout.txt", "后台-stderr.txt", "后台-归属.json", "执行日志.txt"} & set(结果.工件)
 
 
 def test_禁止直连沙箱仅允许本地_tcp_和_wine_unix_socket() -> None:
@@ -104,6 +108,8 @@ def test_前缀内C盘启动配置保持唯一且不覆盖历史文件(tmp_path)
 def test_报告缺失时仍返回代理和交易服务器同步诊断(tmp_path) -> None:
     配置, wine, 前缀, 暂存 = _配置与目录(tmp_path)
     日志 = 配置.终端目录 / "logs" / "本轮.log"
+    # 日志文件需在执行前存在，才能被本轮日志字节快照作为追加片段截取。
+    日志.write_text("历史日志\n", encoding="utf-16le")
     日志.write_text(
         "Proxy\tconnecting through SOCKS5 proxy 127.0.0.1:7897\n"
         "Tester\tnot synchronized with trade server\n",
@@ -116,6 +122,42 @@ def test_报告缺失时仍返回代理和交易服务器同步诊断(tmp_path) 
     # 专门桩测试验证新增日志的诊断内容。
     assert 结果.状态 is 实验状态.执行无效
     assert "MT5生命周期" in 结果.结果
+
+
+def test_离线能力边界会声明隔离执行器生成的后台工件(tmp_path, monkeypatch) -> None:
+    配置, wine, 前缀, 暂存 = _配置与目录(tmp_path)
+    配置 = replace(配置, 代理地址="127.0.0.1:1")
+    日志 = 配置.终端目录 / "logs" / "本轮.log"
+
+    def 伪执行(self, 输入, 暂存目录):
+        for 名称, 内容 in {
+            "后台-stdout.txt": "",
+            "后台-stderr.txt": "",
+            "后台-归属.json": "{}",
+            "执行日志.txt": "超时",
+        }.items():
+            (暂存目录 / 名称).write_text(内容, encoding="utf-8")
+        日志.write_text("本轮日志\n", encoding="utf-16le")
+        return 执行结果(实验状态.执行无效, {}, {"原因": "MT5 执行超时"})
+
+    monkeypatch.setattr("wt4.mt5单实例探测.隔离MT5执行器.执行", 伪执行)
+    monkeypatch.setattr(
+        单实例MT5探测执行器,
+        "_保留本次日志证据",
+        lambda self, 暂存目录, 运行前日志: (
+            (暂存目录 / "MT5日志证据.txt").write_text(
+                "DG\t0\t20:23:44.439\tProxy\tconnecting through SOCKS5 proxy 127.0.0.1:1\n"
+                "MO\t2\t20:24:25.568\tTester\tnot synchronized with trade server\n",
+                encoding="utf-8",
+            ),
+            "MT5日志证据.txt",
+        )[1],
+    )
+
+    结果 = 单实例MT5探测执行器(配置, wine, 前缀, 5, 离线代理隔离=True).执行(_输入(), 暂存)
+
+    assert 结果.状态 is 实验状态.能力边界已验证
+    assert {"后台-stdout.txt", "后台-stderr.txt", "后台-归属.json", "执行日志.txt"} <= set(结果.工件)
 
 
 def test_探测会将mihomo同窗口目标明确标为关联候选(tmp_path) -> None:
