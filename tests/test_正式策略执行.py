@@ -8,12 +8,14 @@ from pathlib import Path
 from wt4.experiment import 实验输入
 from wt4.正式策略执行 import (
     BTC正式批次准备配置,
+    BTC正式批次运行配置,
     BTC正式单期配置,
     准备BTC正式验收批次,
     正式BTC单期执行器,
     正式场景结果,
     正式MT5场景运行配置,
     真实MT5正式场景运行器,
+    运行BTC正式验收批次,
 )
 from wt4.策略实现 import (
     BTC候选实际二进制,
@@ -149,6 +151,45 @@ def test_正式批次只在受控编译取得真实ex5后冻结连续四期输�
         (开始.isoformat(), 结束.isoformat()) for 开始, 结束 in 生成验收窗口(截至日).周期
     )
     assert len({输入.身份 for 输入 in 结果.批次}) == 4
+
+
+def test_正式批次入口代理前置失败时不部署不编译不创建账本(tmp_path: Path, monkeypatch) -> None:
+    from wt4.正式策略执行 import 正式MT5场景运行配置
+
+    前缀 = tmp_path / "prefix"
+    终端 = 前缀 / "drive_c/Program Files/MetaTrader 5"
+    终端.mkdir(parents=True)
+    wine = tmp_path / "wine"
+    wine.write_text("wine", encoding="utf-8")
+    编译工件 = tmp_path / "编译工件"
+    编译工件.mkdir()
+    调用: list[str] = []
+
+    monkeypatch.setattr(
+        "wt4.正式策略执行.准备BTC正式验收批次",
+        lambda _配置: 调用.append("准备"),
+    )
+    monkeypatch.setattr(
+        "wt4.正式策略执行.通过SOCKS5探测TLS端点",
+        lambda *_: {"通过": False, "阶段": "TLS握手"},
+    )
+    单期 = BTC正式单期配置("127.0.0.1:7897", ("mt5.example", 443), 终端 / "MQL5/Files/wt4/audit")
+    配置 = BTC正式批次运行配置(
+        BTC正式批次准备配置(date(2026, 8, 1), "data", "cost", "mt5", MT5候选策略编译配置(wine, 前缀, 终端), 编译工件),
+        单期,
+        正式MT5场景运行配置(wine, 前缀, 终端, "1", "server", 1),
+        tmp_path / "正式/账本.sqlite", tmp_path / "正式/暂存", tmp_path / "正式/工件",
+    )
+
+    try:
+        运行BTC正式验收批次(配置)
+    except ValueError as 异常:
+        assert "代理前置" in str(异常)
+    else:
+        raise AssertionError("代理失败不得启动正式批次")
+
+    assert 调用 == []
+    assert not (tmp_path / "正式").exists()
 
 
 def test_正式单期封存三场景报告和独立风险工件(tmp_path: Path) -> None:
