@@ -81,3 +81,12 @@ def test_部署预检全部目标以避免部分复制(tmp_path: Path) -> None:
         部署BTC候选策略(候选, 终端)
 
     assert not (终端 / "MQL5/Experts/WaiTrade4/BTC订单块分层风控.mq5").exists()
+
+def test_读取候选递归收集相对路径的间接依赖(tmp_path: Path) -> None:
+    根目录 = _构造候选(tmp_path / "候选")
+    _写(根目录 / "可执行实现/Include/WaiTrade2/依赖.mqh", '#include "间接.mqh"\n')
+    _写(根目录 / "可执行实现/Include/WaiTrade2/间接.mqh", "// indirect\n")
+
+    候选 = 读取BTC候选策略(根目录)
+
+    assert "Include/WaiTrade2/间接.mqh" in 候选.可执行源码哈希

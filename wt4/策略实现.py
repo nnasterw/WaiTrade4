@@ -12,7 +12,7 @@ import shutil
 BTC候选策略目录 = 工作区 / "策略实现/BTC-M5-订单块-分层风控"
 _入口相对路径 = Path("Experts/WaiTrade4/BTC订单块分层风控.mq5")
 _专家顾问 = r"WaiTrade4\BTC订单块分层风控"
-_可执行包含 = re.compile(r'^\s*#include\s+[<"](?:\.\./\.\./)?Include/(.+?)[>"]')
+_可执行包含 = re.compile(r'^\s*#include\s+[<"](.+?)[>"]')
 
 
 @dataclass(frozen=True)
@@ -79,7 +79,19 @@ def _收集可执行源码闭包(可执行目录: Path) -> tuple[Path, ...]:
         for 行 in 文件.read_text(encoding="utf-8-sig", errors="strict").splitlines():
             匹配 = _可执行包含.match(行)
             if 匹配:
-                遍历(Path("Include") / 匹配.group(1))
+                引用 = Path(匹配.group(1))
+                if 引用.is_absolute():
+                    raise ValueError(f"可执行策略引用路径越界: {引用}")
+                if 引用.parts and 引用.parts[0] == "Include":
+                    依赖 = 引用
+                elif 引用.parts and 引用.parts[0] == "WaiTrade2":
+                    依赖 = Path("Include") / 引用
+                else:
+                    try:
+                        依赖 = (文件.parent / 引用).resolve().relative_to(可执行目录.resolve())
+                    except ValueError as 异常:
+                        raise ValueError(f"可执行策略引用路径越界: {引用}") from 异常
+                遍历(依赖)
 
     遍历(_入口相对路径)
     return tuple(sorted(已访问))
