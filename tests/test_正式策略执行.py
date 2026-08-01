@@ -12,7 +12,7 @@ from wt4.账本 import 追加式账本
 
 def _输入(**修改: object) -> 实验输入:
     字段: dict[str, object] = {
-        "策略实现提交": "wt4-btc-candidate", "二进制哈希": "0" * 64,
+        "策略实现提交": "wt4-btc-candidate", "二进制哈希": sha256(b"actual-ex5").hexdigest(),
         "参数": {"风险": 3.0}, "数据指纹": "data", "成本快照": "cost",
         "合约规格": "BTCUSDm", "mt5版本": "MT5", "建模方式": 4,
         "起始日": "2025-01-01", "结束日": "2025-06-30", "分区": "正式",
@@ -68,6 +68,7 @@ class _场景桩:
         return 正式场景结果(
             报告路径=报告, 审计目录=审计目录 if 场景 == "样本外" else None,
             极端压力风险通过=场景 == "压力",
+            实际二进制哈希=输入.二进制哈希,
         )
 
 
@@ -96,7 +97,9 @@ def test_正式单期封存三场景报告和独立风险工件(tmp_path: Path) 
 
     assert 结果.状态 is 实验状态.已归档
     assert 场景.调用次数 == 3
-    assert (暂存 / "正式运行参数.set").read_text(encoding="utf-8").find("InpRiskPercent=3.0") >= 0
+    参数组 = sorted(暂存.glob("正式运行参数-*.set"))
+    assert len(参数组) == 3
+    assert all(参数.read_text(encoding="utf-8").find("InpRiskPercent=3.0") >= 0 for 参数 in 参数组)
     assert 结果.报告工件 == ("报告.html", r"WaiTrade4\BTC订单块分层风控", "M5")
     assert set(结果.风险证据工件 or ()) == {"逐tick权益.json", "开仓风险.json", "风险限额.json"}
     assert all(sha256((暂存 / 名称).read_bytes()).hexdigest() == 哈希 for 名称, 哈希 in 结果.工件.items())
@@ -122,3 +125,24 @@ def test_非正式BTC输入不启动正式场景(tmp_path: Path) -> None:
 
     assert 结果.状态 is 实验状态.治理无效
     assert 场景.调用次数 == 0
+
+
+def test_正式单期拒绝场景自报但未绑定实际加载二进制(tmp_path: Path) -> None:
+    @dataclass
+    class 二进制不一致场景(_场景桩):
+        def 运行(self, 场景: str, 输入: 实验输入, 暂存目录: Path, 参数路径: Path, 审计目录: Path) -> 正式场景结果:
+            结果 = super().运行(场景, 输入, 暂存目录, 参数路径, 审计目录)
+            return 正式场景结果(
+                报告路径=结果.报告路径, 审计目录=结果.审计目录,
+                极端压力风险通过=结果.极端压力风险通过, 实际二进制哈希="1" * 64,
+            )
+
+    场景 = 二进制不一致场景()
+    执行器 = 正式BTC单期执行器(_配置(tmp_path), 场景, lambda *_: {"通过": True})
+    暂存 = tmp_path / "run"
+    暂存.mkdir()
+
+    结果 = 执行器.执行(_输入(), 暂存)
+
+    assert 结果.状态 is 实验状态.治理无效
+    assert "二进制哈希" in str(结果.结果["原因"])

@@ -12,7 +12,17 @@ from wt4.mt5报告 import 报告期望, 解析MT5报告
 from wt4.mt5审计 import 转换MT5审计CSV
 from wt4.mt5单实例探测 import 通过SOCKS5探测TLS端点
 from wt4.正式验收工件 import 完成正式验收风险桥接
-from wt4.策略实现 import BTC候选策略目录, 生成BTC正式运行参数, 读取BTC候选策略
+from wt4.策略实现 import (
+    BTC候选策略目录,
+    BTC候选实际二进制,
+    BTC候选策略,
+    BTC候选策略部署,
+    MT5候选策略编译配置,
+    受控编译BTC候选策略,
+    生成BTC正式运行参数,
+    部署BTC候选策略,
+    读取BTC候选策略,
+)
 from wt4.编排 import 实验状态, 执行结果
 
 
@@ -40,6 +50,9 @@ class 正式场景结果:
     报告路径: Path
     审计目录: Path | None = None
     极端压力风险通过: bool = False
+    # 场景运行器必须返回目标隔离终端内受控编译产生的 EX5 哈希。
+    # 正式输入中的二进制哈希只在这里得到实际加载证据，不能由调用方自报。
+    实际二进制哈希: str | None = None
 
 
 class 正式场景运行器(Protocol):
@@ -91,22 +104,33 @@ class 正式BTC单期执行器:
             if not 暂存目录.is_dir() or 暂存目录.is_symlink():
                 raise ValueError("正式暂存目录不存在或不是普通目录")
             候选 = 读取BTC候选策略(self.配置.候选策略目录)
-            参数 = 生成BTC正式运行参数(候选, 暂存目录 / "正式运行参数.set", 输入.身份)
-            审计目录 = self.配置.审计根目录 / 输入.身份
-            if 审计目录.exists():
-                raise ValueError("正式审计目录已存在，拒绝复用")
-
-            场景结果 = {
-                场景: self.场景运行器.运行(场景, 输入, 暂存目录, 参数.运行路径, 审计目录)
+            参数组 = {
+                场景: 生成BTC正式运行参数(
+                    候选, 暂存目录 / f"正式运行参数-{场景}.set", self._场景审计标识(输入.身份, 场景)
+                )
                 for 场景 in _场景报告名
             }
+            审计目录组 = {
+                场景: self.配置.审计根目录 / 参数.审计运行标识
+                for 场景, 参数 in 参数组.items()
+            }
+            if any(目录.exists() for 目录 in 审计目录组.values()):
+                raise ValueError("正式场景审计目录已存在，拒绝复用")
+
+            场景结果 = {
+                场景: self.场景运行器.运行(场景, 输入, 暂存目录, 参数组[场景].运行路径, 审计目录组[场景])
+                for 场景 in _场景报告名
+            }
+            实际二进制哈希 = {结果.实际二进制哈希 for 结果 in 场景结果.values()}
+            if None in 实际二进制哈希 or 实际二进制哈希 != {输入.二进制哈希}:
+                return self._无效(实验状态.治理无效, "正式场景实际加载二进制哈希与冻结实验输入不一致")
             报告 = {场景: self._核验报告(输入, 场景, 结果.报告路径, 暂存目录) for 场景, 结果 in 场景结果.items()}
             报告哈希 = {场景: sha256(结果.报告路径.read_bytes()).hexdigest() for 场景, 结果 in 场景结果.items()}
             if len(set(报告哈希.values())) != len(报告哈希):
                 return self._无效(实验状态.治理无效, "正式三场景报告内容重复，拒绝复用样本外证据")
 
             样本外审计目录 = 场景结果["样本外"].审计目录
-            if 样本外审计目录 is None or 样本外审计目录.resolve() != 审计目录.resolve():
+            if 样本外审计目录 is None or 样本外审计目录.resolve() != 审计目录组["样本外"].resolve():
                 raise ValueError("样本外审计目录未绑定本次实验身份")
             权益, 风险 = self._封存审计原件(样本外审计目录, 暂存目录)
             风险限额 = 暂存目录 / "风险限额.json"
@@ -118,7 +142,7 @@ class 正式BTC单期执行器:
                 输入工件完整=True, 治理通过=True,
             )
             工件路径 = [
-                参数.运行路径,
+                *(参数.运行路径 for 参数 in 参数组.values()),
                 *(结果.报告路径 for 结果 in 场景结果.values()),
                 暂存目录 / "审计原件/equity.csv", 暂存目录 / "审计原件/opening_risk.csv",
                 权益, 风险, 风险限额,
@@ -128,7 +152,8 @@ class 正式BTC单期执行器:
                 状态=实验状态.已归档, 工件=工件,
                 结果={
                     "代理前置探测": 代理探测, "冻结来源标识": 候选.冻结来源标识,
-                    "正式运行参数哈希": 参数.运行哈希,
+                    "正式运行参数哈希": {场景: 参数.运行哈希 for 场景, 参数 in 参数组.items()},
+                    "实际加载二进制哈希": 输入.二进制哈希,
                 },
                 验收输入=验收输入,
                 评分证据工件=("压力报告.html", "无摩擦报告.html"),
@@ -141,6 +166,12 @@ class 正式BTC单期执行器:
     @staticmethod
     def _无效(状态: 实验状态, 原因: str) -> 执行结果:
         return 执行结果(状态=状态, 工件={}, 结果={"原因": 原因})
+
+    @staticmethod
+    def _场景审计标识(实验身份: str, 场景: str) -> str:
+        if 场景 not in _场景报告名:
+            raise ValueError(f"未知正式场景: {场景}")
+        return sha256(f"{实验身份}:{场景}".encode("utf-8")).hexdigest()
 
     @staticmethod
     def _核验报告(输入: 实验输入, 场景: str, 路径: Path, 暂存目录: Path):
