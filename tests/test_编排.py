@@ -77,6 +77,17 @@ class _失败执行器:
         return 执行结果(实验状态.数据无效, {}, {"原因": "缺失真实 ticks"})
 
 
+class _能力边界执行器:
+    def 执行(self, 输入: 实验输入, 暂存目录: Path) -> 执行结果:
+        证据 = 暂存目录 / "MT5日志证据.txt"
+        证据.write_text("不可用SOCKS5阻断同步", encoding="utf-8")
+        return 执行结果(
+            实验状态.能力边界已验证,
+            {证据.name: sha256(证据.read_bytes()).hexdigest()},
+            {"能力边界": "离线代理隔离", "报告缺失为预期": True},
+        )
+
+
 class _篡改输入执行器:
     def 执行(self, 输入: 实验输入, 暂存目录: Path) -> 执行结果:
         输入.参数["风险"] = 99
@@ -231,6 +242,29 @@ def test_无效实验保留失败分类且拒绝相同身份重跑(tmp_path) -> 
     assert [事件.类型 for 事件 in 账本.事件(输入.身份)] == ["已创建", "数据无效"]
     with pytest.raises(ValueError, match="拒绝重跑"):
         编排器.运行(输入, _失败执行器())
+
+
+def test_能力边界验证归档证据但不会伪装成成功回测(tmp_path) -> None:
+    账本 = 追加式账本(tmp_path / "账本.sqlite")
+    编排器 = 中央实验编排器(账本, tmp_path / "暂存", tmp_path / "工件")
+
+    结果 = 编排器.运行(_输入({"实验": "离线代理隔离"}), _能力边界执行器())
+
+    assert 结果.状态 is 实验状态.能力边界已验证
+    assert 结果.工件目录 is not None
+    assert (结果.工件目录 / "MT5日志证据.txt").is_file()
+    assert [事件.类型 for 事件 in 账本.事件(结果.实验身份)] == ["已创建", "能力边界已验证"]
+
+
+def test_正式策略验收拒绝能力边界结果(tmp_path) -> None:
+    账本 = 追加式账本(tmp_path / "账本.sqlite")
+    编排器 = 中央实验编排器(账本, tmp_path / "暂存", tmp_path / "工件")
+
+    结果 = 编排器.运行(_正式输入("2026-01-01", "2026-06-30"), _能力边界执行器())
+
+    assert 结果.状态 is 实验状态.治理无效
+    assert 结果.工件目录 is None
+    assert [事件.类型 for 事件 in 账本.事件(结果.实验身份)] == ["已创建", "治理无效"]
 
 
 def test_执行器篡改可变参数不会改写实验身份或已创建账本输入(tmp_path) -> None:

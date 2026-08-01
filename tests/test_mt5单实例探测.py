@@ -179,11 +179,22 @@ Terminal\texit with code 0
     }
 
 
-def test_离线代理隔离接受未形成授权同步和完整回测的运行() -> None:
-    结果 = 核验离线代理隔离结果("Proxy\tconnecting through SOCKS5 proxy 127.0.0.1:1\nTester\tnot synchronized with trade server")
+def test_离线代理隔离接受实际命中不可用代理且未同步的运行() -> None:
+    结果 = 核验离线代理隔离结果(
+        "DG\t0\t20:23:44.439\tProxy\tconnecting through SOCKS5 proxy 127.0.0.1:1\n"
+        "MO\t2\t20:24:25.568\tTester\tnot synchronized with trade server",
+        "127.0.0.1:1",
+    )
 
     assert 结果["通过"] is True
-    assert 结果["结论"] == "离线代理未形成MT5成功链路"
+    assert 结果["结论"] == "离线代理已阻断MT5交易服务器同步"
+
+
+def test_离线代理隔离缺少代理或未同步证据时不能冒充边界结论() -> None:
+    结果 = 核验离线代理隔离结果("Tester\tautomatical testing started", "127.0.0.1:1")
+
+    assert 结果["通过"] is False
+    assert 结果["结论"] == "离线代理隔离证据不足"
 
 
 def test_日志解码同时保留_utf8_tester_和_utf16le_terminal_证据() -> None:
