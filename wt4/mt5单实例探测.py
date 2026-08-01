@@ -395,6 +395,7 @@ class 单实例MT5探测执行器:
         超时秒数: int,
         Mihomo日志路径: Path | None = None,
         离线代理隔离: bool = False,
+        启动配置路径模式: str = "外置Z盘",
     ) -> None:
         if not Wine命令.is_file():
             raise ValueError(f"Wine 命令不存在: {Wine命令}")
@@ -408,6 +409,9 @@ class 单实例MT5探测执行器:
         self.超时秒数 = 超时秒数
         self.Mihomo日志路径 = Mihomo日志路径
         self.离线代理隔离 = 离线代理隔离
+        if 启动配置路径模式 not in {"外置Z盘", "前缀内C盘"}:
+            raise ValueError("MT5 启动配置路径模式仅允许外置Z盘或前缀内C盘")
+        self.启动配置路径模式 = 启动配置路径模式
         self.沙箱命令 = shutil.which("sandbox-exec")
         if self.沙箱命令 is None:
             raise ValueError("缺少 sandbox-exec，无法建立 MT5 禁止直连边界")
@@ -415,6 +419,7 @@ class 单实例MT5探测执行器:
     def 执行(self, 输入: 实验输入, 暂存目录: Path) -> 执行结果:
         代理观测开始 = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         运行配置 = 生成MT5探测配置(self.探测配置, 暂存目录)
+        启动配置, Wine启动配置 = self._准备启动配置(运行配置, 暂存目录)
         持久代理配置组 = 写入MT5持久SOCKS5配置组(self.探测配置)
         持久代理失败 = [
             f"{路径}: {失败}"
@@ -449,8 +454,8 @@ class 单实例MT5探测执行器:
             "-p",
             self._禁止直连沙箱配置(),
             str(self.Wine命令),
-            r"C:\Program Files\MetaTrader 5 Tester\terminal64.exe",
-            f"/config:{self._mac路径转WineZ盘(运行配置)}",
+            self._Wine终端路径(),
+            f"/config:{Wine启动配置}",
         )
         结果 = 隔离MT5执行器(
             MT5回测配置(
@@ -488,6 +493,8 @@ class 单实例MT5探测执行器:
             "MT5实际测试区间": 实际测试区间,
             "参数输入证据哈希": self._参数文件哈希(参数证据, 暂存目录),
             "MT5实际参数路径": str(实际参数路径) if 实际参数路径 else None,
+            "MT5启动配置路径模式": self.启动配置路径模式,
+            "MT5启动配置": str(启动配置),
         }
         if not 报告证据:
             return 执行结果(
@@ -495,7 +502,7 @@ class 单实例MT5探测执行器:
                 {},
                 {**结果数据, "原因": "缺少 MT5 工件", "缺失": ["报告.html"]},
             )
-        for 名称 in ("mt5-探测.ini", *持久代理证据名称, "共享状态-运行前.json", "共享状态差异.json", 日志证据, *参数证据, *报告证据):
+        for 名称 in ("mt5-探测.ini", "mt5-启动.ini", *持久代理证据名称, "共享状态-运行前.json", "共享状态差异.json", 日志证据, *参数证据, *报告证据):
             路径 = 暂存目录 / 名称
             工件[名称] = 隔离MT5执行器._哈希(路径)
         if 生命周期["历史数据不可用标记"]:
@@ -538,6 +545,40 @@ class 单实例MT5探测执行器:
                 {**结果数据, "原因": "MT5 严格 SOCKS5 链路证据不完整"},
             )
         return 执行结果(结果.状态, 工件, 结果数据)
+
+    def _准备启动配置(self, 运行配置: Path, 暂存目录: Path) -> tuple[Path, str]:
+        """以唯一配置文件对照 Z 盘与历史 C 盘启动路径。
+
+        C 盘模式只在本轮专属 Wine Prefix 的 C:\bt 创建由实验身份派生的新
+        文件；绝不覆盖历史 backtest.ini。两种模式都封存实际传给 MT5 的相同
+        字节，确保 A/B 的唯一变量是配置路径与启动终端。
+        """
+        证据 = 暂存目录 / "mt5-启动.ini"
+        if 证据.exists():
+            raise ValueError("MT5 启动配置证据已存在")
+        if self.启动配置路径模式 == "外置Z盘":
+            证据.write_bytes(运行配置.read_bytes())
+            return 运行配置, self._mac路径转WineZ盘(运行配置)
+
+        报告名称 = self._配置报告名称(运行配置)
+        # 后台回收只能操作命令行带有本轮暂存身份的独立 PGID。不能只使用
+        # Report 名称（它是路径哈希的截断值），否则宿主异常退出后无法
+        # 精确认领这条 Wine/MT5 链路。
+        配置文件名 = f"{暂存目录.name}-{报告名称}.ini"
+        C盘配置 = self.Wine前缀 / "drive_c/bt" / 配置文件名
+        if C盘配置.exists() or C盘配置.is_symlink():
+            raise ValueError(f"拒绝覆盖前缀内既有 MT5 启动配置: {C盘配置}")
+        C盘配置.parent.mkdir(parents=True, exist_ok=True)
+        C盘配置.write_bytes(运行配置.read_bytes())
+        证据.write_bytes(C盘配置.read_bytes())
+        return C盘配置, rf"C:\bt\{配置文件名}"
+
+    def _Wine终端路径(self) -> str:
+        try:
+            相对路径 = self.探测配置.终端目录.resolve().relative_to(self.Wine前缀.resolve() / "drive_c")
+        except ValueError as 异常:
+            raise ValueError("MT5 终端必须属于声明 Wine Prefix") from 异常
+        return "C:\\" + str(相对路径).replace("/", "\\") + r"\terminal64.exe"
 
     def _收集Mihomo时间窗口候选(self, 开始时刻: str, 结束时刻: str) -> dict[str, object] | None:
         if self.Mihomo日志路径 is None:

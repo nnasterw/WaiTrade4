@@ -9,7 +9,7 @@ import re
 import socket
 
 from wt4.experiment import 实验输入
-from wt4.mt5单实例探测 import 单实例MT5探测执行器, 通过SOCKS5探测端点
+from wt4.mt5单实例探测 import 单实例MT5探测执行器, 通过SOCKS5探测TLS端点
 from wt4.mt5探测 import MT5短窗口探测配置
 from wt4.账本 import 追加式账本
 from wt4.编排 import 中央实验编排器
@@ -20,6 +20,7 @@ from wt4.编排 import 中央实验编排器
 默认隔离Wine前缀 = 工作区 / "runtime/MT5并发能力/隔离实例/甲-wine前缀"
 默认Wine前缀 = 默认隔离Wine前缀
 默认Tester = 默认Wine前缀 / "drive_c/Program Files/MetaTrader 5 Tester"
+默认主终端 = 默认Wine前缀 / "drive_c/Program Files/MetaTrader 5"
 默认历史参数 = 默认Wine前缀 / (
     "drive_c/Program Files/MetaTrader 5/MQL5/Profiles/Tester/v11btc-r234.set"
 )
@@ -67,8 +68,13 @@ def 核验SOCKS5代理前置(
     代理地址: str = 默认代理地址,
     探测端点: tuple[str, int] = 默认代理探测端点,
 ) -> dict[str, object]:
-    """只在 SOCKS5 CONNECT 已通过时允许启动 MT5，绝不降级直连。"""
-    探测 = 通过SOCKS5探测端点(代理地址, *探测端点)
+    """只在 SOCKS5 隧道内 TLS 可用时允许启动 MT5，绝不降级直连。
+
+    仅 SOCKS5 CONNECT 成功只说明本机端口接受请求；代理上游随后断开时，
+    MT5 仍会启动并留下无法同步的无效运行。因此必须完成到 MT5 端点的
+    TLS 握手，才能作为启动前置条件。
+    """
+    探测 = 通过SOCKS5探测TLS端点(代理地址, *探测端点)
     if 探测.get("通过") is not True:
         raise ValueError(f"SOCKS5 代理前置探测失败，拒绝启动 MT5: {探测}")
     return 探测
@@ -147,13 +153,19 @@ def main() -> None:
     参数.add_argument("--服务器", default="Exness-MT5Trial5")
     参数.add_argument("--wine", type=Path, default=默认Wine)
     参数.add_argument("--wine前缀", type=Path, default=默认Wine前缀)
-    参数.add_argument("--tester", type=Path, default=默认Tester)
+    参数.add_argument("--启动方式", choices=("tester-外置", "主终端-内置"), default="主终端-内置")
+    参数.add_argument("--tester", type=Path)
     参数.add_argument("--历史参数", type=Path, default=默认历史参数)
     参数.add_argument("--mihomo日志", type=Path, default=默认Mihomo日志)
     参数.add_argument("--代理地址", default=默认代理地址)
     参数.add_argument("--离线代理隔离", action="store_true")
     实参 = 参数.parse_args()
 
+    if 实参.tester is None:
+        实参.tester = 实参.wine前缀 / (
+            "drive_c/Program Files/MetaTrader 5" if 实参.启动方式 == "主终端-内置"
+            else "drive_c/Program Files/MetaTrader 5 Tester"
+        )
     if not 实参.wine.is_file() or not 实参.tester.is_dir() or not 实参.wine前缀.is_dir():
         raise SystemExit("Wine、Wine 前缀或 Tester 路径无效")
     try:
@@ -208,6 +220,7 @@ def main() -> None:
             实参.超时秒数,
             实参.mihomo日志,
             离线代理隔离=实参.离线代理隔离,
+            启动配置路径模式="前缀内C盘" if 实参.启动方式 == "主终端-内置" else "外置Z盘",
         ),
     )
     print(json.dumps({"输入": asdict(配置), "实验身份": 结果.实验身份, "状态": 结果.状态, "工件目录": str(结果.工件目录) if 结果.工件目录 else None}, ensure_ascii=False, default=str))

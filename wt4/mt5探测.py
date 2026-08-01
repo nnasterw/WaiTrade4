@@ -24,9 +24,9 @@ class MT5短窗口探测配置:
     登录账号: str
     服务器: str
     代理地址: str = "127.0.0.1:7897"
-    # MT5 INI 的 ProxyType 枚举中，0 才表示 SOCKS5。该值已由本机
-    # 成功闭环工件与 WaiTrade2 运行配置共同验证，不能按常见协议编号猜成 1。
-    代理类型: int = 0
+    # 本机 MT5 日志已实锤 ProxyType=1 才会显示 SOCKS5；0 显示 NONE，
+    # 因而禁止将通用枚举猜测或历史直连成功误作 SOCKS5 证据。
+    代理类型: int = 1
     参数文件路径: Path | None = None
 
 
@@ -38,7 +38,7 @@ def 生成MT5探测配置(配置: MT5短窗口探测配置, 暂存目录: Path) 
         raise ValueError(f"MT5 终端不存在: {配置.终端目录}")
     if not 配置.代理地址:
         raise ValueError("MT5 探测必须显式指定代理")
-    if 配置.代理类型 != 0:
+    if 配置.代理类型 != 1:
         raise ValueError("MT5 探测仅允许 SOCKS5 代理，禁止 NONE/HTTP 直连回退")
     if not 配置.登录账号 or not 配置.服务器:
         raise ValueError("MT5 探测必须显式指定登录账号和服务器")
@@ -134,7 +134,7 @@ def 写入MT5持久SOCKS5配置组(配置: MT5短窗口探测配置) -> tuple[Pa
 
 def _写入单个MT5持久SOCKS5配置(配置: MT5短窗口探测配置, 路径: Path) -> Path:
     """原子改写一个已经定位的 ``common.ini``。"""
-    if 配置.代理类型 != 0 or not 配置.代理地址:
+    if 配置.代理类型 != 1 or not 配置.代理地址:
         raise ValueError("MT5 持久代理配置仅允许显式 SOCKS5 地址")
     if not 路径.is_file():
         raise ValueError(f"MT5 持久代理配置不存在: {路径}")
@@ -145,7 +145,7 @@ def _写入单个MT5持久SOCKS5配置(配置: MT5短窗口探测配置, 路径:
     except UnicodeDecodeError as 异常:
         raise ValueError(f"MT5 持久代理配置不是 UTF-16: {路径}") from 异常
 
-    for 键, 值 in (("ProxyEnable", "1"), ("ProxyType", "0"), ("ProxyAddress", 配置.代理地址)):
+    for 键, 值 in (("ProxyEnable", "1"), ("ProxyType", "1"), ("ProxyAddress", 配置.代理地址)):
         内容, 替换数 = re.subn(rf"(?m)^{键}=.*$", f"{键}={值}", 内容)
         if 替换数 != 1:
             raise ValueError(f"MT5 持久代理配置字段异常: {键}={替换数}")
@@ -174,7 +174,7 @@ def 核验MT5持久SOCKS5配置(配置路径: Path, 期望代理地址: str) -> 
     失败: list[str] = []
     if 字段.get("ProxyEnable") != "1":
         失败.append("MT5 持久代理未启用")
-    if 字段.get("ProxyType") != "0":
+    if 字段.get("ProxyType") != "1":
         失败.append("MT5 持久代理不是 SOCKS5")
     if 字段.get("ProxyAddress") != 期望代理地址:
         失败.append("MT5 持久代理地址不匹配")

@@ -10,12 +10,13 @@ from wt4.运行单实例能力探测 import (
     核验离线代理隔离前置,
 )
 from wt4.mt5探测 import MT5短窗口探测配置
-from wt4.运行单实例能力探测 import 默认Wine前缀, 默认Tester
+from wt4.运行单实例能力探测 import 默认Wine前缀, 默认Tester, 默认主终端
 
 
 def test_单实例入口默认使用仓库隔离_wine_前缀() -> None:
     assert "runtime/MT5并发能力/隔离实例/甲-wine前缀" in str(默认Wine前缀)
     assert 默认Tester == 默认Wine前缀 / "drive_c/Program Files/MetaTrader 5 Tester"
+    assert 默认主终端 == 默认Wine前缀 / "drive_c/Program Files/MetaTrader 5"
 
 
 def test_仅将历史六点五风险参数降为三(tmp_path: Path) -> None:
@@ -71,10 +72,25 @@ def test_实验身份纳入运行超时这一单变量(tmp_path: Path) -> None:
     assert 创建输入("a" * 64, 配置, 600, 代理前置探测={"通过": True, "阶段": "CONNECT"}).身份 != 创建输入("a" * 64, 配置, 600).身份
 
 
+def test_TLS代理前置成功时保留探测证据(monkeypatch) -> None:
+    证据 = {
+        "通过": True,
+        "阶段": "TLS握手",
+        "TLS版本": "TLSv1.3",
+        "密码套件": "TLS_AES_256_GCM_SHA384",
+    }
+    monkeypatch.setattr(
+        "wt4.运行单实例能力探测.通过SOCKS5探测TLS端点",
+        lambda *_: 证据,
+    )
+
+    assert 核验SOCKS5代理前置() == 证据
+
+
 def test_代理前置失败时拒绝启动而不允许直连(monkeypatch) -> None:
     monkeypatch.setattr(
-        "wt4.运行单实例能力探测.通过SOCKS5探测端点",
-        lambda *_: {"通过": False, "阶段": "CONNECT"},
+        "wt4.运行单实例能力探测.通过SOCKS5探测TLS端点",
+        lambda *_: {"通过": False, "阶段": "TLS握手"},
     )
 
     try:

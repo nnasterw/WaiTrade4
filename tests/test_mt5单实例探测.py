@@ -26,19 +26,18 @@ def _输入() -> 实验输入:
 
 
 def _配置与目录(tmp_path: Path) -> tuple[MT5短窗口探测配置, Path, Path, Path]:
-    终端 = tmp_path / "MetaTrader 5 Tester"
+    前缀 = tmp_path / "prefix"
+    终端 = 前缀 / "drive_c/Program Files/MetaTrader 5 Tester"
     for 相对目录 in ("logs", "Tester/cache", "Tester/logs", "Tester/Agent-127.0.0.1-3000/logs", "reports", "MQL5/Profiles/Tester", "config"):
         (终端 / 相对目录).mkdir(parents=True)
     (终端 / "terminal64.exe").write_bytes(b"")
     (终端 / "config/common.ini").write_text(
-        "[Common]\r\nProxyEnable=0\r\nProxyType=0\r\nProxyAddress=127.0.0.1:7897\r\n",
+        "[Common]\r\nProxyEnable=0\r\nProxyType=1\r\nProxyAddress=127.0.0.1:7897\r\n",
         encoding="utf-16",
     )
     wine = tmp_path / "wine"
     wine.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     wine.chmod(0o755)
-    前缀 = tmp_path / "prefix"
-    前缀.mkdir()
     暂存 = tmp_path / "暂存"
     暂存.mkdir()
     配置 = MT5短窗口探测配置(
@@ -75,6 +74,31 @@ def test_禁止直连沙箱仅允许本地_tcp_和_wine_unix_socket() -> None:
     assert "(remote unix-socket)" in 配置
     assert '(remote tcp "localhost:*")' in 配置
     assert "network-inbound" not in 配置
+
+
+def test_前缀内C盘启动配置保持唯一且不覆盖历史文件(tmp_path) -> None:
+    配置, wine, _前缀, 暂存 = _配置与目录(tmp_path)
+    前缀 = tmp_path / "prefix"
+    终端 = 前缀 / "drive_c/Program Files/MetaTrader 5"
+    (终端 / "config").mkdir(parents=True)
+    (终端 / "terminal64.exe").write_bytes(b"")
+    (终端 / "config/common.ini").write_text(
+        "[Common]\r\nProxyEnable=0\r\nProxyType=1\r\nProxyAddress=127.0.0.1:7897\r\n", encoding="utf-16"
+    )
+    配置 = MT5短窗口探测配置(
+        终端, r"WaiTrade\WaiTrade_OB", "WaiTrade_OB.set", "BTCUSDm", "M5",
+        "2026.05.01", "2026.05.02", 300, 2000, "277656700", "Exness-MT5Trial5",
+    )
+    执行器 = 单实例MT5探测执行器(配置, wine, 前缀, 5, 启动配置路径模式="前缀内C盘")
+    运行配置 = 暂存 / "mt5-探测.ini"
+    运行配置.write_text("[Tester]\r\nReport=wt4-abc123\r\n", encoding="utf-8")
+
+    实际配置, Wine路径 = 执行器._准备启动配置(运行配置, 暂存)
+
+    assert 实际配置 == 前缀 / "drive_c/bt" / f"{暂存.name}-wt4-abc123.ini"
+    assert Wine路径 == rf"C:\bt\{暂存.name}-wt4-abc123.ini"
+    assert (暂存 / "mt5-启动.ini").read_bytes() == 运行配置.read_bytes()
+    assert 执行器._Wine终端路径() == r"C:\Program Files\MetaTrader 5\terminal64.exe"
 
 
 def test_报告缺失时仍返回代理和交易服务器同步诊断(tmp_path) -> None:

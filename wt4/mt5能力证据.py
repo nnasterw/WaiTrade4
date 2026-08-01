@@ -87,9 +87,9 @@ def _读取严格SOCKS5配置(路径: Path) -> dict[str, str]:
         行.split("=", 1) for 行 in 路径.read_text(encoding="utf-8").splitlines()
         if "=" in 行 and not 行.lstrip().startswith(";")
     )
-    # 本机 MT5 的已验证枚举值：0 表示 SOCKS5。不能沿用通用协议
-    # 编号猜测为 1，否则会把真实的 SOCKS5 配置误判为不合格。
-    if 配置.get("ProxyEnable") != "1" or 配置.get("ProxyType") != "0" or not 配置.get("ProxyAddress"):
+    # 本机 MT5 日志已实锤枚举值 1 表示 SOCKS5；0 会记录为 NONE，
+    # 不能把历史直连成功的配置误判为严格 SOCKS5。
+    if 配置.get("ProxyEnable") != "1" or 配置.get("ProxyType") != "1" or not 配置.get("ProxyAddress"):
         raise 能力证据错误(f"MT5 探测配置不符合严格 SOCKS5 要求: {路径}")
     return 配置
 
