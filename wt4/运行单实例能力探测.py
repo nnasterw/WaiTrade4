@@ -9,7 +9,7 @@ import re
 import socket
 
 from wt4.experiment import 实验输入
-from wt4.mt5单实例探测 import 单实例MT5探测执行器, 通过SOCKS5探测TLS端点
+from wt4.mt5单实例探测 import 单实例MT5探测执行器, 通过SOCKS5探测端点
 from wt4.mt5探测 import MT5短窗口探测配置
 from wt4.账本 import 追加式账本
 from wt4.编排 import 中央实验编排器
@@ -25,6 +25,8 @@ from wt4.编排 import 中央实验编排器
     "drive_c/Program Files/MetaTrader 5/MQL5/Profiles/Tester/v11btc-r234.set"
 )
 默认代理地址 = "127.0.0.1:7897"
+# 这是 MT5 历史成功链实际通过 SOCKS5 访问的服务器入口。该端口承载
+# MT5 私有协议而非 HTTPS，故不可将 TLS 握手结果误作代理可用性判断。
 默认代理探测端点 = ("mt5.exness.com", 443)
 默认Mihomo日志 = Path(
     "/Users/wen/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev/logs/latest.log"
@@ -68,13 +70,14 @@ def 核验SOCKS5代理前置(
     代理地址: str = 默认代理地址,
     探测端点: tuple[str, int] = 默认代理探测端点,
 ) -> dict[str, object]:
-    """只在 SOCKS5 隧道内 TLS 可用时允许启动 MT5，绝不降级直连。
+    """核验 SOCKS5 到 MT5 实际入口的 TCP 隧道，绝不降级直连。
 
-    仅 SOCKS5 CONNECT 成功只说明本机端口接受请求；代理上游随后断开时，
-    MT5 仍会启动并留下无法同步的无效运行。因此必须完成到 MT5 端点的
-    TLS 握手，才能作为启动前置条件。
+    Exness 的 MT5 入口并非通用 HTTPS 服务；对其强行发起 TLS ClientHello
+    会被正常关闭，不能据此阻止一条本可用的 MT5 链路。SOCKS5 CONNECT
+    成功证明代理已接受并建立至该 MT5 入口的隧道；之后必须由本轮 MT5
+    日志中的授权与终端同步证据决定该运行是否有效。
     """
-    探测 = 通过SOCKS5探测TLS端点(代理地址, *探测端点)
+    探测 = 通过SOCKS5探测端点(代理地址, *探测端点)
     if 探测.get("通过") is not True:
         raise ValueError(f"SOCKS5 代理前置探测失败，拒绝启动 MT5: {探测}")
     return 探测

@@ -90,7 +90,7 @@ class _场景桩:
 
 
 def _配置(tmp_path: Path) -> BTC正式单期配置:
-    return BTC正式单期配置(代理地址="127.0.0.1:7897", 代理TLS端点=("mt5.example", 443), 审计根目录=tmp_path / "ea-audit")
+    return BTC正式单期配置(代理地址="127.0.0.1:7897", 代理MT5端点=("mt5.example", 443), 审计根目录=tmp_path / "ea-audit")
 
 
 def test_代理前置失败不启动任何正式场景(tmp_path: Path) -> None:
@@ -170,8 +170,8 @@ def test_正式批次入口代理前置失败时不部署不编译不创建账�
         lambda _配置: 调用.append("准备"),
     )
     monkeypatch.setattr(
-        "wt4.正式策略执行.通过SOCKS5探测TLS端点",
-        lambda *_: {"通过": False, "阶段": "TLS握手"},
+        "wt4.正式策略执行.通过SOCKS5探测端点",
+        lambda *_: {"通过": False, "阶段": "CONNECT"},
     )
     单期 = BTC正式单期配置("127.0.0.1:7897", ("mt5.example", 443), 终端 / "MQL5/Files/wt4/audit")
     配置 = BTC正式批次运行配置(

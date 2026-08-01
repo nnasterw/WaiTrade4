@@ -15,7 +15,7 @@ from wt4.experiment import (
 )
 from wt4.mt5报告 import 报告期望, 解析MT5报告
 from wt4.mt5审计 import 转换MT5审计CSV
-from wt4.mt5单实例探测 import 通过SOCKS5探测TLS端点
+from wt4.mt5单实例探测 import 通过SOCKS5探测端点
 from wt4.mt5单实例探测 import 单实例MT5探测执行器
 from wt4.mt5探测 import MT5短窗口探测配置
 from wt4.正式验收工件 import 完成正式验收风险桥接
@@ -128,7 +128,7 @@ class BTC正式单期配置:
     """
 
     代理地址: str
-    代理TLS端点: tuple[str, int]
+    代理MT5端点: tuple[str, int]
     审计根目录: Path
     候选策略目录: Path = BTC候选策略目录
 
@@ -285,7 +285,7 @@ class 正式BTC单期执行器:
         self,
         配置: BTC正式单期配置,
         场景运行器: 正式场景运行器,
-        代理前置核验: 代理前置核验器 = 通过SOCKS5探测TLS端点,
+        代理前置核验: 代理前置核验器 = 通过SOCKS5探测端点,
     ) -> None:
         self.配置 = 配置
         self.场景运行器 = 场景运行器
@@ -297,7 +297,7 @@ class 正式BTC单期执行器:
         except ValueError as 异常:
             return self._无效(实验状态.治理无效, str(异常))
 
-        主机, 端口 = self.配置.代理TLS端点
+        主机, 端口 = self.配置.代理MT5端点
         try:
             代理探测 = self.代理前置核验(self.配置.代理地址, 主机, 端口)
         except (OSError, ValueError) as 异常:
@@ -425,7 +425,7 @@ def 运行BTC正式验收批次(配置: BTC正式批次运行配置) -> 正式�
     场景 = 配置.场景配置
     if 单期.代理地址 != 场景.代理地址:
         raise ValueError("正式批次的单期与场景 SOCKS5 代理必须一致")
-    代理探测 = 通过SOCKS5探测TLS端点(单期.代理地址, *单期.代理TLS端点)
+    代理探测 = 通过SOCKS5探测端点(单期.代理地址, *单期.代理MT5端点)
     if 代理探测.get("通过") is not True:
         raise ValueError(f"正式批次代理前置核验失败，拒绝部署或启动 MT5: {代理探测}")
     if not 配置.暂存根目录.parent.is_dir() or not 配置.工件根目录.parent.is_dir():
