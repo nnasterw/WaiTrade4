@@ -10,6 +10,12 @@ from wt4.运行单实例能力探测 import (
     核验离线代理隔离前置,
 )
 from wt4.mt5探测 import MT5短窗口探测配置
+from wt4.运行单实例能力探测 import 默认Wine前缀, 默认Tester
+
+
+def test_单实例入口默认使用仓库隔离_wine_前缀() -> None:
+    assert "runtime/MT5并发能力/隔离实例/甲-wine前缀" in str(默认Wine前缀)
+    assert 默认Tester == 默认Wine前缀 / "drive_c/Program Files/MetaTrader 5 Tester"
 
 
 def test_仅将历史六点五风险参数降为三(tmp_path: Path) -> None:

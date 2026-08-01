@@ -17,7 +17,8 @@ from wt4.编排 import 中央实验编排器
 
 工作区 = Path(__file__).resolve().parent.parent
 默认Wine = Path("/Applications/MetaTrader 5.app/Contents/SharedSupport/wine/bin/wine")
-默认Wine前缀 = Path("/Users/wen/Library/Application Support/net.metaquotes.wine.metatrader5")
+默认隔离Wine前缀 = 工作区 / "runtime/MT5并发能力/隔离实例/甲-wine前缀"
+默认Wine前缀 = 默认隔离Wine前缀
 默认Tester = 默认Wine前缀 / "drive_c/Program Files/MetaTrader 5 Tester"
 默认历史参数 = 默认Wine前缀 / (
     "drive_c/Program Files/MetaTrader 5/MQL5/Profiles/Tester/v11btc-r234.set"
@@ -155,6 +156,10 @@ def main() -> None:
 
     if not 实参.wine.is_file() or not 实参.tester.is_dir() or not 实参.wine前缀.is_dir():
         raise SystemExit("Wine、Wine 前缀或 Tester 路径无效")
+    try:
+        实参.tester.resolve().relative_to(实参.wine前缀.resolve() / "drive_c")
+    except ValueError as 异常:
+        raise SystemExit("Tester 必须位于声明 Wine 前缀的 drive_c 内，拒绝写入共享配置") from 异常
     if not (实参.tester / "MQL5/Experts/WaiTrade2/WaiTrade_OB.ex5").is_file():
         raise SystemExit("历史成功 EA 不存在")
     try:
