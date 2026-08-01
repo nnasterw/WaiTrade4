@@ -61,6 +61,97 @@ def test_归属记录仅在命令仍携带实验身份时受限回收进程组(t
     assert "已受限回收" in 归属记录.read_text(encoding="utf-8")
 
 
+def test_遗留回收仅终止归属记录内且FD4精确匹配的_wineserver(tmp_path: Path, monkeypatch) -> None:
+    实验目录 = tmp_path / "runtime" / "实验" / "暂存" / ("d" * 64)
+    Wine前缀 = tmp_path / "runtime" / "实例" / "甲"
+    实验目录.mkdir(parents=True)
+    Wine前缀.mkdir(parents=True)
+    归属记录 = 实验目录 / "后台-归属.json"
+    归属记录.write_text(
+        json.dumps({
+            "版本": 1, "状态": "运行中", "进程号": 123, "进程组号": 123,
+            "实验目录": str(实验目录), "命令验证片段": 实验目录.name,
+            "Wine前缀": str(Wine前缀),
+        }),
+        encoding="utf-8",
+    )
+    已终止: list[int] = []
+    monkeypatch.setattr("wt4.mt5后台.os.kill", lambda 进程号, _信号: 已终止.append(进程号))
+    调用次数 = 0
+    def _查询后退出(_前缀: Path) -> set[int]:
+        nonlocal 调用次数
+        调用次数 += 1
+        return {456} if 调用次数 == 1 else set()
+    monkeypatch.setattr(MT5后台进程, "_查询Wine服务", _查询后退出)
+
+    assert MT5后台进程.回收遗留自有Wine服务(归属记录) == (456,)
+    assert 已终止 == [456]
+
+
+def test_遗留回收拒绝旧归属记录的_wineserver_前缀缺失(tmp_path: Path, monkeypatch) -> None:
+    实验目录 = tmp_path / "runtime" / "实验" / "暂存" / ("e" * 64)
+    实验目录.mkdir(parents=True)
+    归属记录 = 实验目录 / "后台-归属.json"
+    归属记录.write_text(
+        json.dumps({
+            "版本": 1, "状态": "运行中", "进程号": 123, "进程组号": 123,
+            "实验目录": str(实验目录), "命令验证片段": 实验目录.name,
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(MT5后台进程, "_查询Wine服务", lambda _: (_ for _ in ()).throw(AssertionError("不得查询")))
+
+    assert MT5后台进程.回收遗留自有Wine服务(归属记录) == ()
+
+
+def test_遗留回收拒绝工作区运行目录外的_wineserver_前缀(tmp_path: Path) -> None:
+    实验目录 = tmp_path / "runtime" / "实验" / "暂存" / ("f" * 64)
+    外部前缀 = tmp_path / "外部前缀"
+    实验目录.mkdir(parents=True)
+    外部前缀.mkdir()
+    归属记录 = 实验目录 / "后台-归属.json"
+    归属记录.write_text(
+        json.dumps({
+            "版本": 1, "状态": "运行中", "进程号": 123, "进程组号": 123,
+            "实验目录": str(实验目录), "命令验证片段": 实验目录.name,
+            "Wine前缀": str(外部前缀),
+        }),
+        encoding="utf-8",
+    )
+
+    assert MT5后台进程._读取归属记录(归属记录) is None
+
+
+def test_进程组收敛后精确回收wine服务并写入终态(tmp_path: Path, monkeypatch) -> None:
+    实验目录 = tmp_path / "runtime" / "实验" / "暂存" / ("g" * 64)
+    Wine前缀 = tmp_path / "runtime" / "实例" / "甲"
+    实验目录.mkdir(parents=True)
+    Wine前缀.mkdir(parents=True)
+    归属记录 = 实验目录 / "后台-归属.json"
+    归属记录.write_text(
+        json.dumps({
+            "版本": 1, "状态": "运行中", "进程号": 123, "进程组号": 123,
+            "实验目录": str(实验目录), "命令验证片段": 实验目录.name,
+            "Wine前缀": str(Wine前缀),
+        }),
+        encoding="utf-8",
+    )
+    调用次数 = 0
+    def _进程组成员(_: int) -> list[tuple[int, str]]:
+        nonlocal 调用次数
+        调用次数 += 1
+        return [(123, f"terminal {实验目录.name}")] if 调用次数 == 1 else []
+
+    monkeypatch.setattr(MT5后台进程, "_进程组成员", _进程组成员)
+    monkeypatch.setattr("wt4.mt5后台.os.killpg", lambda *_: None)
+    monkeypatch.setattr(MT5后台进程, "回收遗留自有Wine服务", lambda *_: (456,))
+
+    assert MT5后台进程.回收遗留自有进程组(归属记录) is True
+    内容 = json.loads(归属记录.read_text(encoding="utf-8"))
+    assert 内容["状态"] == "已受限回收"
+    assert 内容["受限回收Wine服务进程号"] == [456]
+
+
 def test_归属记录验证片段不匹配时绝不回收进程(tmp_path: Path) -> None:
     实验目录 = tmp_path / ("b" * 64)
     实验目录.mkdir()

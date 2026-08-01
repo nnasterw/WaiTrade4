@@ -90,6 +90,8 @@ class MT5后台进程:
             "命令验证片段": 实验目录.name,
             "已启动时间": self._已启动时间,
         }
+        if self._Wine前缀 is not None:
+            内容["Wine前缀"] = str(self._Wine前缀)
         if 原因 is not None:
             内容["原因"] = 原因
         return 内容
@@ -120,6 +122,18 @@ class MT5后台进程:
             return None
         if 内容.get("命令验证片段") != 实验目录.name:
             return None
+        Wine前缀 = 内容.get("Wine前缀")
+        if Wine前缀 is not None:
+            if not isinstance(Wine前缀, str):
+                return None
+            try:
+                前缀路径 = Path(Wine前缀).resolve()
+                运行根目录 = next(祖先 for 祖先 in 实验目录.parents if 祖先.name == "runtime")
+                前缀路径.relative_to(运行根目录)
+            except (OSError, StopIteration, ValueError):
+                return None
+            if not 前缀路径.is_dir():
+                return None
         return 内容
 
     @staticmethod
@@ -160,10 +174,55 @@ class MT5后台进程:
         截止 = monotonic() + 超时秒数
         while monotonic() < 截止:
             if not cls._进程组成员(进程组号):
-                cls._更新归属记录状态(归属记录, 内容, "已受限回收")
+                Wine服务 = cls.回收遗留自有Wine服务(归属记录, 内容)
+                cls._更新归属记录状态(
+                    归属记录,
+                    内容,
+                    "已受限回收",
+                    额外内容={"受限回收Wine服务进程号": list(Wine服务)},
+                )
                 return True
             sleep(0.1)
         return False
+
+    @classmethod
+    def 回收遗留自有Wine服务(
+        cls,
+        归属记录: Path,
+        内容: dict[str, object] | None = None,
+        超时秒数: float = 10,
+    ) -> tuple[int, ...]:
+        """在已验证归属记录中精确回收独立派生的 wineserver。
+
+        Wine 服务不属于 terminal 所在进程组。仅接受归属记录内、且仍位于
+        同一工作区 ``runtime`` 下的专属 Prefix；再以 wineserver 的 FD 4
+        精确匹配 Prefix。旧归属记录未包含 Prefix 时保守地不做任何操作。
+        """
+        if os.name != "posix" or 超时秒数 <= 0:
+            return ()
+        # 即便调用方刚刚验证过归属记录，也重新从磁盘读取一次。这个公开
+        # 方法不能因为调用方构造的字典而越过路径和结构校验。
+        已验证内容 = cls._读取归属记录(归属记录)
+        if 内容 is not None and 已验证内容 != 内容:
+            return ()
+        if 已验证内容 is None:
+            return ()
+        Wine前缀文本 = 已验证内容.get("Wine前缀")
+        if not isinstance(Wine前缀文本, str):
+            return ()
+        Wine前缀 = Path(Wine前缀文本).resolve()
+        待终止 = cls._查询Wine服务(Wine前缀)
+        for 进程号 in 待终止:
+            try:
+                os.kill(进程号, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        截止 = monotonic() + 超时秒数
+        while monotonic() < 截止:
+            if not (cls._查询Wine服务(Wine前缀) & 待终止):
+                return tuple(sorted(待终止))
+            sleep(0.1)
+        return ()
 
     @classmethod
     def 确认遗留自有进程组已退出(cls, 归属记录: Path) -> bool:
@@ -191,8 +250,19 @@ class MT5后台进程:
         return False
 
     @staticmethod
-    def _更新归属记录状态(归属记录: Path, 内容: dict[str, object], 状态: str) -> None:
-        更新 = {**内容, "状态": 状态, "结束时间": datetime.now(timezone.utc).isoformat()}
+    def _更新归属记录状态(
+        归属记录: Path,
+        内容: dict[str, object],
+        状态: str,
+        *,
+        额外内容: Mapping[str, object] | None = None,
+    ) -> None:
+        更新 = {
+            **内容,
+            **(额外内容 or {}),
+            "状态": 状态,
+            "结束时间": datetime.now(timezone.utc).isoformat(),
+        }
         临时 = 归属记录.with_suffix(".json.tmp")
         临时.write_text(json.dumps(更新, ensure_ascii=False, sort_keys=True), encoding="utf-8")
         临时.replace(归属记录)
