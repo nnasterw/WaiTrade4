@@ -11,7 +11,7 @@ from wt4.mt5单实例探测 import 单实例MT5探测执行器
 from wt4.mt5报告 import 报告期望, 解析MT5报告
 from wt4.mt5重复探测 import 单实例MT5重复探测器
 from wt4.mt5探测 import MT5短窗口探测配置
-from wt4.运行两实例并发能力探测 import _确认无既有MT5进程
+from wt4.运行两实例并发能力探测 import _确认专属Wine前缀未被占用
 from wt4.运行单实例能力探测 import 创建输入, 生成三风险参数副本, 生成参数文件名, 计算三风险参数内容, 核验SOCKS5代理前置
 from wt4.账本 import 追加式账本
 from wt4.编排 import 中央实验编排器
@@ -45,7 +45,7 @@ def main() -> None:
         代理前置探测 = 核验SOCKS5代理前置(实参.代理地址)
     except ValueError as 异常:
         raise SystemExit(str(异常)) from 异常
-    _确认无既有MT5进程()
+    _确认专属Wine前缀未被占用(实参.wine前缀)
 
     标识 = uuid4().hex[:16]
     根目录 = 工作区 / "runtime/MT5重复能力/工件" / 标识
@@ -70,7 +70,7 @@ def main() -> None:
         结果 = 编排器.运行(输入, 单实例MT5探测执行器(配置, 实参.wine, 实参.wine前缀, 实参.超时秒数))
         输入与工件[轮次] = (结果, 结果.工件目录 / "报告.html" if 结果.工件目录 else Path())
         # 只要运行结束便拒绝容忍残留；下一轮也由这一检查隔开。
-        _确认无既有MT5进程()
+        _确认专属Wine前缀未被占用(实参.wine前缀)
         from wt4.编排 import 执行结果, 实验状态
         return 执行结果(结果.状态, {}, {"实验身份": 结果.实验身份, "工件目录": str(结果.工件目录) if 结果.工件目录 else None})
 

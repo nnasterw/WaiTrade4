@@ -68,3 +68,34 @@ def test_执行器可为专属实例传递环境变量(tmp_path) -> None:
 
     assert 结果.状态 is 实验状态.已归档
     assert (tmp_path / "报告.html").read_text(encoding="utf-8") == "隔离值"
+
+
+def test_执行器封存专属Tester审计CSV并纳入哈希(tmp_path) -> None:
+    审计来源 = tmp_path / "tester-files" / "wt4" / "audit" / "本轮"
+    审计来源.mkdir(parents=True)
+    (审计来源 / "equity.csv").write_text(
+        "time,balance,equity\n2025.02.02 13:36:28.001,300.00,300.00\n",
+        encoding="utf-8",
+    )
+    (审计来源 / "opening_risk.csv").write_text(
+        "deal_id,time,equity,initial_risk,open_initial_risk\n",
+        encoding="utf-8",
+    )
+    执行器 = 隔离MT5执行器(
+        MT5回测配置(
+            (sys.executable, "-c", "from pathlib import Path; Path('报告.html').write_text('ok')"),
+            5,
+            ("报告.html",),
+            审计CSV来源目录=审计来源,
+        )
+    )
+
+    暂存目录 = tmp_path / "本轮"
+    暂存目录.mkdir()
+    结果 = 执行器.执行(_输入(), 暂存目录)
+
+    assert 结果.状态 is 实验状态.已归档
+    assert {
+        "审计原件/equity.csv", "审计原件/opening_risk.csv",
+        "逐tick权益.json", "开仓风险.json",
+    } <= set(结果.工件)

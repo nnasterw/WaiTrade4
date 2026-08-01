@@ -235,7 +235,7 @@ def 核验MT5开仓风险证据(
         if 项 is None:
             失败.append(f"{成交.成交号}:缺少开仓风险证据")
             continue
-        if 项.时间 != 成交.时间 or 项.快照.时间 != 成交.时间:
+        if _服务器秒(项.时间) != 成交.时间 or _服务器秒(项.快照.时间) != 成交.时间:
             失败.append(f"{成交.成交号}:开仓风险证据时间与Deals不一致")
             continue
         权益点位 = 权益索引.get(成交.时间)
@@ -260,6 +260,11 @@ def 核验MT5开仓风险证据(
         基础.已实现日损失,
         tuple(dict.fromkeys(失败)),
     )
+
+
+def _服务器秒(时间: str) -> str:
+    """将 EA tick 审计的毫秒时间归一到 MT5 报告的服务器秒。"""
+    return 时间[:19] if len(时间) == 23 and 时间[19] == "." else 时间
 
 
 def 计算当日亏损(日初权益: Decimal, 当前权益: Decimal, 当日出入金净额: Decimal = Decimal("0")) -> Decimal:
@@ -289,7 +294,7 @@ def 重演逐tick日内权益风险(
     日内最大亏损: dict[str, Decimal] = {}
     for 点 in 权益曲线:
         try:
-            日期 = datetime.strptime(点.时间, "%Y.%m.%d %H:%M:%S").date().isoformat()
+            日期 = _解析审计时间(点.时间).date().isoformat()
         except ValueError as 错误:
             raise ValueError("逐tick权益时间必须为YYYY.MM.DD HH:MM:SS") from 错误
         if 点.权益 <= 0:
@@ -304,6 +309,13 @@ def 重演逐tick日内权益风险(
             计算当日亏损(日初权益[日期], 点.权益, 日净出入金.get(日期, Decimal("0"))),
         )
     return 逐tick日内权益风险结果(日初权益, 日内最低权益, 日净出入金, 日内最大亏损, 规则)
+
+
+def _解析审计时间(时间: str) -> datetime:
+    try:
+        return datetime.strptime(时间, "%Y.%m.%d %H:%M:%S.%f" if "." in 时间[11:] else "%Y.%m.%d %H:%M:%S")
+    except ValueError as 错误:
+        raise ValueError("逐tick权益时间必须为YYYY.MM.DD HH:MM:SS或YYYY.MM.DD HH:MM:SS.fff") from 错误
 
 
 def 核验风险限额(*, 当前权益: Decimal, 日初权益: Decimal, 单笔初始风险: Decimal, 开放初始风险: Decimal, 当日亏损: Decimal, 规则: 风险规则) -> list[str]:

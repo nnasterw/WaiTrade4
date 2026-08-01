@@ -44,13 +44,20 @@ def _列表(内容: object, 名称: str) -> list[dict[str, Any]]:
 
 def _时间(value: object, 名称: str) -> datetime:
     if not isinstance(value, str):
-        raise 正式验收工件错误(f"{名称}必须为YYYY.MM.DD HH:MM:SS")
+        raise 正式验收工件错误(f"{名称}必须为YYYY.MM.DD HH:MM:SS或YYYY.MM.DD HH:MM:SS.fff")
     try:
-        结果 = datetime.strptime(value, "%Y.%m.%d %H:%M:%S")
+        格式 = "%Y.%m.%d %H:%M:%S.%f" if "." in value[11:] else "%Y.%m.%d %H:%M:%S"
+        结果 = datetime.strptime(value, 格式)
     except ValueError as 异常:
-        raise 正式验收工件错误(f"{名称}必须为YYYY.MM.DD HH:MM:SS") from 异常
-    # strptime 会接受非零填充格式；必须拒绝，否则字典序和时间序可能不同。
-    if 结果.strftime("%Y.%m.%d %H:%M:%S") != value:
+        raise 正式验收工件错误(f"{名称}必须为YYYY.MM.DD HH:MM:SS或YYYY.MM.DD HH:MM:SS.fff") from 异常
+    # 保持字典序与时间序一致；权益审计允许毫秒，以免同一服务器秒内的
+    # 多个 tick 被丢弃。
+    标准 = 结果.strftime("%Y.%m.%d %H:%M:%S")
+    if "." in value[11:]:
+        小数 = value.rsplit(".", 1)[1]
+        if len(小数) != 3 or not 小数.isdigit() or 标准 + "." + 小数 != value:
+            raise 正式验收工件错误(f"{名称}必须为YYYY.MM.DD HH:MM:SS.fff")
+    elif 标准 != value:
         raise 正式验收工件错误(f"{名称}必须为YYYY.MM.DD HH:MM:SS")
     return 结果
 

@@ -7,9 +7,9 @@ from hashlib import sha256
 import json
 from pathlib import Path
 import re
-import subprocess
 from uuid import uuid4
 
+from wt4.mt5后台 import MT5后台进程
 from wt4.mt5单实例探测 import 单实例MT5探测执行器
 from wt4.mt5并发探测 import 两实例MT5并发探测器
 from wt4.mt5报告 import 报告期望, 解析MT5报告
@@ -45,17 +45,14 @@ def _参数文件(来源: Path, 输入目录: Path, 标识: str, 名称: str) ->
     return 文件名, 路径
 
 
-def _确认无既有MT5进程() -> None:
-    """并发实验仅管理自身进程组，发现既有 MT5/Wine 就拒绝启动。"""
-    查找 = subprocess.run(
-        # 方括号避免 pgrep 把其自身命令行中的搜索表达式当成命中项。
-        ["pgrep", "-af", r"[t]erminal64\.exe|[w]ineserver"],
-        text=True, capture_output=True, check=False,
-    )
-    if 查找.returncode == 0 and 查找.stdout.strip():
-        raise RuntimeError(f"发现既有 MT5/Wine 进程，拒绝并发实验: {查找.stdout.strip()}")
-    if 查找.returncode not in {0, 1}:
-        raise RuntimeError(f"无法核验既有 MT5/Wine 进程: {查找.stderr.strip()}")
+def _确认专属Wine前缀未被占用(*Wine前缀: Path) -> None:
+    """只拒绝本轮专属 Prefix 被占用，绝不枚举或干扰共享 MT5/Wine。"""
+    if not Wine前缀:
+        raise ValueError("至少需要一个专属 Wine 前缀")
+    被占用 = {str(前缀): sorted(MT5后台进程._查询Wine服务(前缀)) for 前缀 in Wine前缀}
+    被占用 = {前缀: 进程号 for 前缀, 进程号 in 被占用.items() if 进程号}
+    if 被占用:
+        raise RuntimeError(f"本轮专属 Wine 前缀仍有服务进程，拒绝重叠启动: {被占用}")
 
 
 def _写入结论并完成记账(
@@ -118,7 +115,6 @@ def main() -> None:
         代理前置探测 = 核验SOCKS5代理前置(实参.代理地址)
     except ValueError as 异常:
         raise SystemExit(str(异常)) from 异常
-    _确认无既有MT5进程()
     标识 = uuid4().hex[:16]
     运行根目录 = 工作区 / "runtime/MT5并发能力/工件" / 标识
     输入目录 = 运行根目录 / "输入"
@@ -126,6 +122,7 @@ def main() -> None:
     账本 = 追加式账本(运行根目录 / "账本.sqlite")
     实例 = {名称: _实例(名称, 实参.隔离根目录 / f"{名称}-wine前缀", 运行根目录) for 名称 in ("甲", "乙")}
     校验实例隔离(list(实例.values()))
+    _确认专属Wine前缀未被占用(*(配置.Wine前缀 for 配置 in 实例.values()))
     for 配置 in 实例.values():
         if not (配置.终端目录 / "terminal64.exe").is_file() or not 配置.Wine前缀.is_dir():
             raise SystemExit(f"隔离 MT5 实例不完整: {配置.名称}")

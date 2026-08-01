@@ -25,7 +25,7 @@ from wt4.mt5探测 import (
 from wt4.mt5报告 import 报告期望, 解析MT5报告
 from wt4.mt5中断探测 import 两实例中断探测器
 from wt4.mt5能力 import 校验实例隔离
-from wt4.运行两实例并发能力探测 import _实例, _确认无既有MT5进程
+from wt4.运行两实例并发能力探测 import _实例, _确认专属Wine前缀未被占用
 from wt4.运行单实例能力探测 import 计算三风险参数内容, 核验SOCKS5代理前置
 from wt4.账本 import 追加式账本
 
@@ -106,12 +106,12 @@ def main() -> None:
         代理前置探测 = 核验SOCKS5代理前置(实参.代理地址)
     except ValueError as 异常:
         raise SystemExit(str(异常)) from 异常
-    _确认无既有MT5进程()
     标识 = uuid4().hex[:16]
     根目录 = 工作区 / "runtime/MT5并发能力/中断工件" / 标识
     根目录.mkdir(parents=True)
     实例 = {名称: _实例(名称, 实参.隔离根目录 / f"{名称}-wine前缀", 根目录) for 名称 in ("甲", "乙")}
     校验实例隔离(list(实例.values()))
+    _确认专属Wine前缀未被占用(*(配置.Wine前缀 for 配置 in 实例.values()))
     账本 = 追加式账本(根目录 / "账本.sqlite")
     账本.追加(标识, "已创建", {
         "甲区间": [实参.甲开始日, 实参.甲结束日], "乙区间": [实参.乙开始日, 实参.乙结束日],
@@ -145,7 +145,7 @@ def main() -> None:
     报告 = 解析MT5报告(报告目标, 报告期望("WaiTrade_OB", "BTCUSDm", "M1", 实参.乙开始日, 实参.乙结束日, Decimal("300.00")))
     实际区间 = 解析MT5实际测试区间(日志文本)
     try:
-        _确认无既有MT5进程()
+        _确认专属Wine前缀未被占用(*(配置.Wine前缀 for 配置 in 实例.values()))
         无残留 = True
     except RuntimeError:
         无残留 = False

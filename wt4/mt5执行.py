@@ -4,10 +4,12 @@ from dataclasses import dataclass
 from hashlib import sha256
 import os
 from pathlib import Path
+import shutil
 from typing import Mapping
 
 from wt4.experiment import 实验输入
 from wt4.mt5后台 import MT5后台进程
+from wt4.mt5审计 import 转换MT5审计CSV
 from wt4.编排 import 实验状态, 执行结果
 
 
@@ -23,6 +25,7 @@ class MT5回测配置:
     超时秒数: int
     预期工件: tuple[str, ...]
     环境变量: Mapping[str, str] | None = None
+    审计CSV来源目录: Path | None = None
 
 
 class 隔离MT5执行器:
@@ -67,12 +70,21 @@ class 隔离MT5执行器:
                 {},
                 {"原因": f"MT5 返回码 {返回码}", "后台进程": self._后台证据(启动快照, 进程.快照()), "受限回收Wine服务进程号": list(Wine服务)},
             )
+        try:
+            审计工件 = self._封存审计工件(暂存目录)
+        except (OSError, ValueError) as 异常:
+            return 执行结果(
+                实验状态.执行无效,
+                {},
+                {"原因": f"MT5 审计工件无效: {异常}", "后台进程": self._后台证据(启动快照, 进程.快照()), "受限回收Wine服务进程号": list(Wine服务)},
+            )
 
         工件 = {
             日志.name: self._哈希(日志),
             进程.标准输出.name: self._哈希(进程.标准输出),
             进程.标准错误.name: self._哈希(进程.标准错误),
         }
+        工件.update(审计工件)
         缺失: list[str] = []
         for 相对路径 in self.配置.预期工件:
             文件 = self._受限工件路径(暂存目录, 相对路径)
@@ -91,6 +103,37 @@ class 隔离MT5执行器:
             工件,
             {"MT5返回码": 返回码, "后台进程": self._后台证据(启动快照, 进程.快照()), "受限回收Wine服务进程号": list(Wine服务)},
         )
+
+    def _封存审计工件(self, 暂存目录: Path) -> dict[str, str]:
+        """复制专属 Tester Files 内的 EA 原件并严格转换为正式工件。
+
+        来源只允许是预先绑定的专属实例目录；每个原件仅接受普通文件，
+        且一律复制到本轮暂存后再解析，避免解析共享终端或可变源文件。
+        """
+        来源目录 = self.配置.审计CSV来源目录
+        if 来源目录 is None:
+            return {}
+        if not 来源目录.is_dir() or 来源目录.is_symlink():
+            raise ValueError("审计CSV来源目录不存在或不是普通目录")
+        原件目录 = 暂存目录 / "审计原件"
+        原件目录.mkdir()
+        原件: dict[str, Path] = {}
+        for 名称 in ("equity.csv", "opening_risk.csv"):
+            来源 = 来源目录 / 名称
+            目标 = 原件目录 / 名称
+            if not 来源.is_file() or 来源.is_symlink():
+                raise ValueError(f"缺少或拒绝链接审计原件: {名称}")
+            shutil.copyfile(来源, 目标)
+            原件[名称] = 目标
+        逐tick权益 = 暂存目录 / "逐tick权益.json"
+        开仓风险 = 暂存目录 / "开仓风险.json"
+        转换MT5审计CSV(原件["equity.csv"], 原件["opening_risk.csv"], 逐tick权益, 开仓风险)
+        return {
+            "审计原件/equity.csv": self._哈希(原件["equity.csv"]),
+            "审计原件/opening_risk.csv": self._哈希(原件["opening_risk.csv"]),
+            逐tick权益.name: self._哈希(逐tick权益),
+            开仓风险.name: self._哈希(开仓风险),
+        }
 
     @staticmethod
     def _后台证据(启动: object, 结束: object) -> dict[str, object]:
