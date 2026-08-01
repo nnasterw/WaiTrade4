@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from contextlib import contextmanager
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -19,6 +21,35 @@ class 后台进程快照:
     已启动时间: str
     状态: str
     返回码: int | None
+
+
+@contextmanager
+def 独占实验执行锁(实验目录: Path, *, 非阻塞: bool = False):
+    """在单个实验目录上持有跨宿主的排他锁。
+
+    正在执行的编排器必须持续持锁；恢复者只尝试非阻塞获取。这样恢复
+    只会接管已经退出的宿主，绝不会与仍在收集 MT5 结果的宿主竞争终态。
+    锁由内核随宿主退出自动释放，不能替代归属记录的进程回收验证。
+    """
+    if not 实验目录.is_dir():
+        raise ValueError(f"实验目录不存在，不能加锁: {实验目录}")
+    # 锁不能放在实验目录中：成功归档要求暂存目录的全部普通文件都进入
+    # 已哈希清单。把锁放到同级控制目录，既不会变成未声明工件，也能在
+    # 工件目录原子迁移前一直保护完整临界区。
+    锁目录 = 实验目录.parent / ".执行锁"
+    锁目录.mkdir(exist_ok=True)
+    锁路径 = 锁目录 / f"{实验目录.name}.lock"
+    with 锁路径.open("a+", encoding="utf-8") as 锁文件:
+        标志 = fcntl.LOCK_EX | (fcntl.LOCK_NB if 非阻塞 else 0)
+        try:
+            fcntl.flock(锁文件.fileno(), 标志)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(锁文件.fileno(), fcntl.LOCK_UN)
 
 
 class MT5后台进程:

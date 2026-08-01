@@ -16,7 +16,7 @@ from wt4.验收 import 验收输入
 from wt4.mt5报告 import 报告期望, 解析MT5报告
 from wt4.正式验收工件 import 完成正式验收风险桥接
 from wt4.风险 import 风险限额快照, 重演风险限额, 权益点, 重演逐tick日内权益风险
-from wt4.mt5后台 import MT5后台进程
+from wt4.mt5后台 import MT5后台进程, 独占实验执行锁
 from wt4.编排 import (
     中央单实例后台队列,
     中央实验编排器,
@@ -323,6 +323,27 @@ def test_受限恢复确认进程组已不存在后才追加无效终态(tmp_pat
     assert 编排器.受限恢复遗留后台实验(输入.身份) is True
     assert [事件.类型 for 事件 in 账本.事件(输入.身份)] == ["已创建", "执行无效"]
     assert 账本.事件(输入.身份)[-1].内容 == {"原因": "后台宿主提前退出，已确认本轮进程组退出"}
+
+
+def test_受限恢复不接管仍持有执行锁的实验(tmp_path, monkeypatch) -> None:
+    账本 = 追加式账本(tmp_path / "账本.sqlite")
+    编排器 = 中央实验编排器(账本, tmp_path / "暂存", tmp_path / "工件")
+    输入 = _输入({"任务": "仍在执行"})
+    暂存目录 = tmp_path / "暂存" / 输入.身份
+    暂存目录.mkdir(parents=True)
+    账本.追加(输入.身份, 实验状态.已创建, {"输入": {}})
+    (暂存目录 / "后台-归属.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        MT5后台进程,
+        "回收遗留自有进程组",
+        lambda _: (_ for _ in ()).throw(AssertionError("不得接管仍在执行的实验")),
+    )
+
+    with 独占实验执行锁(暂存目录) as 已获得锁:
+        assert 已获得锁 is True
+        assert 编排器.受限恢复遗留后台实验(输入.身份) is False
+
+    assert [事件.类型 for 事件 in 账本.事件(输入.身份)] == ["已创建"]
 
 
 class _留痕执行器:
