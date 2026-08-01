@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
 from hashlib import sha256
 from pathlib import Path
 import shutil
 from typing import Callable, Protocol
 
-from wt4.experiment import 实验输入, 核验正式策略验收单期
+from wt4.experiment import (
+    实验输入,
+    核验正式策略验收批次,
+    核验正式策略验收单期,
+)
 from wt4.mt5报告 import 报告期望, 解析MT5报告
 from wt4.mt5审计 import 转换MT5审计CSV
 from wt4.mt5单实例探测 import 通过SOCKS5探测TLS端点
@@ -25,11 +30,68 @@ from wt4.策略实现 import (
     部署BTC候选策略,
     读取BTC候选策略,
 )
+from wt4.窗口 import 生成验收窗口
 from wt4.编排 import 实验状态, 执行结果
 
 
 _专家顾问 = r"WaiTrade4\BTC订单块分层风控"
 _场景报告名 = {"样本外": "报告.html", "压力": "压力报告.html", "无摩擦": "无摩擦报告.html"}
+
+
+@dataclass(frozen=True)
+class BTC正式批次准备配置:
+    """冻结正式四期输入前唯一允许的部署与编译配置。
+
+    ``数据指纹``、``成本快照``、``MT5版本`` 必须由调用方从本次真实
+    终端和数据快照取得；这里不伪造这些会影响实验身份的事实。目标终端
+    必须是新的专属 Prefix，受控编译函数会进一步拒绝预存 EX5。
+    """
+
+    截至日: date
+    数据指纹: str
+    成本快照: str
+    MT5版本: str
+    编译配置: MT5候选策略编译配置
+    工件目录: Path
+    候选策略目录: Path = BTC候选策略目录
+
+
+@dataclass(frozen=True)
+class BTC正式批次准备结果:
+    候选: BTC候选策略
+    部署: BTC候选策略部署
+    实际二进制: BTC候选实际二进制
+    批次: tuple[实验输入, ...]
+
+
+def 准备BTC正式验收批次(配置: BTC正式批次准备配置) -> BTC正式批次准备结果:
+    """部署并受控编译后，才用真实 EX5 哈希冻结连续四期输入。
+
+    此处刻意不运行 MT5：真实回测仍由正式场景运行器负责。这个准备层
+    只建立不可逆顺序，防止调用方先冻结实验身份、后用另一份 EX5 替换。
+    """
+    if not 配置.数据指纹 or not 配置.成本快照 or not 配置.MT5版本:
+        raise ValueError("正式批次必须提供非空数据指纹、成本快照和 MT5版本")
+    if not 配置.工件目录.is_dir() or 配置.工件目录.is_symlink():
+        raise ValueError("正式批次编译工件目录无效")
+    候选 = 读取BTC候选策略(配置.候选策略目录)
+    部署 = 部署BTC候选策略(候选, 配置.编译配置.终端目录)
+    实际二进制 = 受控编译BTC候选策略(候选, 部署, 配置.编译配置, 配置.工件目录)
+    窗口 = 生成验收窗口(配置.截至日)
+    批次 = tuple(
+        实验输入(
+            策略实现提交=候选.冻结来源标识,
+            二进制哈希=实际二进制.二进制哈希,
+            参数={"风险": 3.0, "来源文件哈希": 候选.冻结文件哈希, "可执行源码哈希": 候选.可执行源码哈希},
+            数据指纹=配置.数据指纹, 成本快照=配置.成本快照,
+            合约规格="BTCUSDm", mt5版本=配置.MT5版本, 建模方式=4,
+            起始日=开始.isoformat(), 结束日=结束.isoformat(), 分区="正式",
+            正式策略验收=True, 交易品种="BTCUSDm", 初始资金="300",
+        )
+        for 开始, 结束 in 窗口.周期
+    )
+    核验正式策略验收批次(批次, 窗口)
+    return BTC正式批次准备结果(候选, 部署, 实际二进制, 批次)
 
 
 @dataclass(frozen=True)

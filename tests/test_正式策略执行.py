@@ -1,17 +1,26 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from hashlib import sha256
 from pathlib import Path
 
 from wt4.experiment import 实验输入
 from wt4.正式策略执行 import (
+    BTC正式批次准备配置,
     BTC正式单期配置,
+    准备BTC正式验收批次,
     正式BTC单期执行器,
     正式场景结果,
     正式MT5场景运行配置,
     真实MT5正式场景运行器,
 )
+from wt4.策略实现 import (
+    BTC候选实际二进制,
+    BTC候选策略部署,
+    MT5候选策略编译配置,
+)
+from wt4.窗口 import 生成验收窗口
 from wt4.编排 import 实验状态, 中央实验编排器
 from wt4.账本 import 追加式账本
 
@@ -91,6 +100,55 @@ def test_代理前置失败不启动任何正式场景(tmp_path: Path) -> None:
     assert 结果.状态 is 实验状态.执行无效
     assert "代理前置" in str(结果.结果["原因"])
     assert 场景.调用次数 == 0
+
+
+def test_正式批次只在受控编译取得真实ex5后冻结连续四期输入(tmp_path: Path, monkeypatch) -> None:
+    候选根目录 = tmp_path / "候选"
+    冻结 = 候选根目录 / "冻结迁移"
+    参数 = b"InpRiskPercent=3.0\n"
+    源码 = b"// candidate\n"
+    (冻结 / "参数").mkdir(parents=True)
+    (冻结 / "参数/V11-BTC-M5-R21.set").write_bytes(参数)
+    (冻结 / "来源.json").write_text(
+        '{"来源标识":"r21","文件哈希":{"参数/V11-BTC-M5-R21.set":"' + sha256(参数).hexdigest() + '"}}',
+        encoding="utf-8",
+    )
+    可执行 = 候选根目录 / "可执行实现/Experts/WaiTrade4/BTC订单块分层风控.mq5"
+    可执行.parent.mkdir(parents=True)
+    可执行.write_bytes(源码)
+    前缀 = tmp_path / "prefix"
+    终端 = 前缀 / "drive_c/Program Files/MetaTrader 5"
+    终端.mkdir(parents=True)
+    wine = tmp_path / "wine"
+    wine.write_text("wine", encoding="utf-8")
+    工件 = tmp_path / "编译工件"
+    工件.mkdir()
+    调用顺序: list[str] = []
+
+    def 伪部署(候选, 目标终端):
+        调用顺序.append("部署")
+        return BTC候选策略部署(候选.专家顾问, 候选.可执行源码哈希, ())
+
+    def 伪编译(候选, 部署, 编译配置, 工件目录):
+        调用顺序.append("编译")
+        return BTC候选实际二进制(候选.专家顾问, 候选.冻结来源标识, 候选.可执行源码哈希, 终端 / "actual.ex5", sha256(b"actual-ex5").hexdigest())
+
+    monkeypatch.setattr("wt4.正式策略执行.部署BTC候选策略", 伪部署)
+    monkeypatch.setattr("wt4.正式策略执行.受控编译BTC候选策略", 伪编译)
+    截至日 = date(2026, 8, 1)
+    结果 = 准备BTC正式验收批次(BTC正式批次准备配置(
+        截至日, "ticks-sha", "cost-sha", "MT5-build",
+        MT5候选策略编译配置(wine, 前缀, 终端),
+        工件, 候选根目录,
+    ))
+
+    assert 调用顺序 == ["部署", "编译"]
+    assert len(结果.批次) == 4
+    assert all(输入.二进制哈希 == sha256(b"actual-ex5").hexdigest() for 输入 in 结果.批次)
+    assert tuple((输入.起始日, 输入.结束日) for 输入 in 结果.批次) == tuple(
+        (开始.isoformat(), 结束.isoformat()) for 开始, 结束 in 生成验收窗口(截至日).周期
+    )
+    assert len({输入.身份 for 输入 in 结果.批次}) == 4
 
 
 def test_正式单期封存三场景报告和独立风险工件(tmp_path: Path) -> None:
