@@ -79,6 +79,36 @@ Report={报告名称}
     return 路径
 
 
+def 生成MT5仅登录配置(配置: MT5短窗口探测配置, 暂存目录: Path) -> Path:
+    """生成只含登录和 SOCKS5 配置的启动 INI。
+
+    刻意不写 ``[Tester]``，避免自动回测在账户授权前抢跑。该文件仍由
+    调用方写入本轮专属 Wine 前缀 C 盘，再以 ``/config:`` 启动，确保
+    后台进程命令行带有不可变实验身份，能够被精确回收。
+    """
+    if not 暂存目录.is_dir():
+        raise ValueError(f"实验暂存目录不存在: {暂存目录}")
+    if not (配置.终端目录 / "terminal64.exe").is_file():
+        raise ValueError(f"MT5 终端不存在: {配置.终端目录}")
+    if 配置.代理类型 != 1 or not 配置.代理地址:
+        raise ValueError("仅登录探测仅允许显式 SOCKS5 地址")
+    if not 配置.登录账号 or not 配置.服务器:
+        raise ValueError("仅登录探测必须显式指定登录账号和服务器")
+    路径 = 暂存目录 / "mt5-仅登录.ini"
+    路径.write_text(
+        f"""; wt4 仅登录同步探测。不可作为策略验收结论。
+[Common]
+Login={配置.登录账号}
+Server={配置.服务器}
+ProxyEnable=1
+ProxyType=1
+ProxyAddress={配置.代理地址}
+""",
+        encoding="utf-8",
+    )
+    return 路径
+
+
 def 写入MT5持久SOCKS5配置(配置: MT5短窗口探测配置) -> Path:
     """把代理写入 Tester 实际读取的 ``config/common.ini``。
 

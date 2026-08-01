@@ -80,6 +80,73 @@ def test_禁止直连沙箱仅允许本地_tcp_和_wine_unix_socket() -> None:
     assert "network-inbound" not in 配置
 
 
+def test_仅登录同步探测不生成_tester_区段且仍绑定_socks5(tmp_path) -> None:
+    from wt4.mt5探测 import 生成MT5仅登录配置
+
+    配置, _wine, _前缀, 暂存 = _配置与目录(tmp_path)
+
+    路径 = 生成MT5仅登录配置(配置, 暂存)
+
+    内容 = 路径.read_text(encoding="utf-8")
+    assert "[Tester]" not in 内容
+    assert "Login=277656700" in 内容
+    assert "Server=Exness-MT5Trial5" in 内容
+    assert "ProxyType=1" in 内容
+    assert "ProxyAddress=127.0.0.1:7897" in 内容
+
+
+def test_仅登录同步探测封存未同步诊断并精确回收(tmp_path, monkeypatch) -> None:
+    配置, wine, 前缀, 暂存 = _配置与目录(tmp_path)
+    日志 = 配置.终端目录 / "logs" / "本轮.log"
+
+    class _进程:
+        def __init__(self):
+            self.标准输出 = 暂存 / "后台-stdout.txt"
+            self.标准错误 = 暂存 / "后台-stderr.txt"
+            self.标准输出.write_text("", encoding="utf-8")
+            self.标准错误.write_text("", encoding="utf-8")
+            (暂存 / "后台-归属.json").write_text("{}", encoding="utf-8")
+            self.已终止 = False
+
+        def 终止自有进程组(self):
+            self.已终止 = True
+
+        def 等待(self, _秒数):
+            return 0
+
+        def 终止自有Wine服务(self):
+            return (123,)
+
+        def 输出文本(self):
+            return ("", "")
+
+    进程 = _进程()
+    monkeypatch.setattr("wt4.mt5单实例探测.MT5后台进程.启动", lambda *_: 进程)
+    monkeypatch.setattr(
+        单实例MT5探测执行器,
+        "_暂存新增日志文本",
+        lambda *_: "DG\t0\t20:23:44.439\tProxy\tconnecting through SOCKS5 proxy 127.0.0.1:7897\nMO\t2\t20:24:25.568\tTester\tnot synchronized with trade server",
+    )
+    monkeypatch.setattr(
+        单实例MT5探测执行器,
+        "_保留本次日志证据",
+        lambda self, 暂存目录, _运行前: (
+            (暂存目录 / "MT5日志证据.txt").write_text(
+                "DG\t0\t20:23:44.439\tProxy\tconnecting through SOCKS5 proxy 127.0.0.1:7897\nMO\t2\t20:24:25.568\tTester\tnot synchronized with trade server",
+                encoding="utf-8",
+            ),
+            "MT5日志证据.txt",
+        )[1],
+    )
+
+    结果 = 单实例MT5探测执行器(配置, wine, 前缀, 1, 启动配置路径模式="前缀内C盘").执行仅登录同步(_输入(), 暂存)
+
+    assert 结果.状态 is 实验状态.能力探测已完成
+    assert 进程.已终止 is True
+    assert 结果.结果["MT5代理同步诊断"]["结论"] == "SOCKS5已连接但MT5交易服务器未同步"
+    assert (暂存 / "mt5-仅登录.ini").is_file()
+
+
 def test_前缀内C盘启动配置保持唯一且不覆盖历史文件(tmp_path) -> None:
     配置, wine, _前缀, 暂存 = _配置与目录(tmp_path)
     前缀 = tmp_path / "prefix"

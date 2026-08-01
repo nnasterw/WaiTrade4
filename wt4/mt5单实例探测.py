@@ -11,14 +11,17 @@ import struct
 import shutil
 from typing import Mapping
 from datetime import datetime
+from time import monotonic, sleep
 
 from wt4.experiment import 实验输入
 from wt4.mt5执行 import MT5回测配置, 隔离MT5执行器
+from wt4.mt5后台 import MT5后台进程
 from wt4.mt5探测 import (
     MT5短窗口探测配置,
     共享状态快照,
     写入MT5持久SOCKS5配置组,
     生成MT5探测配置,
+    生成MT5仅登录配置,
     核验MT5持久SOCKS5配置,
 )
 from wt4.编排 import 实验状态, 执行结果
@@ -587,6 +590,95 @@ class 单实例MT5探测执行器:
             )
         return 执行结果(结果.状态, 工件, 结果数据)
 
+    def 执行仅登录同步(self, 输入: 实验输入, 暂存目录: Path) -> 执行结果:
+        """只启动主终端并等待授权/同步，绝不生成 ``[Tester]`` 配置。
+
+        回测入口会在终端完成授权前自动触发 Tester；这条受控实验将登录
+        链与 Tester 生命周期拆开。无论是否同步，均封存本轮日志和进程
+        归属证据并以能力探测状态归档，供后续决定是否值得进入回测实验。
+        """
+        代理观测开始 = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        运行配置 = 生成MT5仅登录配置(self.探测配置, 暂存目录)
+        启动配置, Wine启动配置 = self._准备启动配置(运行配置, 暂存目录)
+        持久代理配置组 = 写入MT5持久SOCKS5配置组(self.探测配置)
+        持久代理失败 = [
+            f"{路径}: {失败}"
+            for 路径 in 持久代理配置组
+            for 失败 in 核验MT5持久SOCKS5配置(路径, self.探测配置.代理地址)
+        ]
+        if 持久代理失败:
+            return 执行结果(实验状态.执行无效, {}, {"原因": "MT5 持久 SOCKS5 配置未生效", "失败": 持久代理失败})
+
+        持久代理证据 = 暂存目录 / "mt5-持久代理"
+        持久代理证据.mkdir()
+        持久代理证据名称: list[str] = []
+        for 序号, 配置路径 in enumerate(持久代理配置组):
+            名称 = f"{序号:02d}-{配置路径.parent.parent.name}-common.ini"
+            目标 = 持久代理证据 / 名称
+            目标.write_bytes(配置路径.read_bytes())
+            持久代理证据名称.append(目标.relative_to(暂存目录).as_posix())
+
+        运行前日志 = self._日志字节快照()
+        命令 = (
+            self.沙箱命令, "-p", self._禁止直连沙箱配置(),
+            str(self.Wine命令), self._Wine终端路径(), f"/config:{Wine启动配置}",
+        )
+        进程 = MT5后台进程.启动(
+            命令, 暂存目录, {"WINEPREFIX": str(self.Wine前缀)}, 暂存目录
+        )
+        截止 = monotonic() + self.超时秒数
+        已观察同步 = False
+        while monotonic() < 截止:
+            临时日志 = self._暂存新增日志文本(运行前日志)
+            if 解析MT5代理同步诊断(临时日志)["结论"] == "MT5交易服务器已同步":
+                已观察同步 = True
+                break
+            sleep(0.5)
+
+        # 登录成功后终端通常会继续常驻；它必须由本轮归属记录精确终止，
+        # 不得依赖全局 Wine 清理。即使包装进程已先退出，也覆盖其子进程组。
+        进程.终止自有进程组()
+        进程.等待(5)
+        Wine服务 = 进程.终止自有Wine服务()
+        标准输出, 标准错误 = 进程.输出文本()
+        (暂存目录 / "执行日志.txt").write_text(
+            f"仅登录等待秒数={self.超时秒数}\n是否观察到同步={已观察同步}\n"
+            f"--- stdout ---\n{标准输出}\n--- stderr ---\n{标准错误}", encoding="utf-8"
+        )
+        日志证据 = self._保留本次日志证据(暂存目录, 运行前日志)
+        日志文本 = (暂存目录 / 日志证据).read_text(encoding="utf-8")
+        诊断 = 解析MT5代理同步诊断(日志文本)
+        代理观测结束 = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        工件名称 = (
+            "mt5-仅登录.ini", "mt5-启动.ini", *持久代理证据名称,
+            "后台-stdout.txt", "后台-stderr.txt", "后台-归属.json", "执行日志.txt", 日志证据,
+        )
+        工件 = {名称: 隔离MT5执行器._哈希(暂存目录 / 名称) for 名称 in 工件名称}
+        return 执行结果(
+            实验状态.能力探测已完成,
+            工件,
+            {
+                "探测": "仅登录等待交易服务器同步",
+                "等待上限秒数": self.超时秒数,
+                "等待期间观察到同步": 已观察同步,
+                "MT5代理同步诊断": 诊断,
+                "严格SOCKS5链路失败": 核验MT5严格SOCKS5链路(日志文本, self.探测配置.代理地址),
+                "网络隔离": "sandbox-exec: 仅允许 localhost TCP；外网只能经 SOCKS5 转发",
+                "Mihomo时间窗口候选": self._收集Mihomo时间窗口候选(代理观测开始, 代理观测结束),
+                "MT5启动配置": str(启动配置),
+                "受限回收Wine服务进程号": list(Wine服务),
+            },
+        )
+
+    def _暂存新增日志文本(self, 运行前日志: Mapping[str, bytes]) -> str:
+        """在等待期间读取新增日志，仅用于判定是否应提前结束等待。"""
+        内容: list[str] = []
+        for 标识, 当前字节 in sorted(self._日志字节快照().items()):
+            原字节 = 运行前日志.get(标识, b"")
+            新增字节 = 当前字节[len(原字节):] if 当前字节.startswith(原字节) else 当前字节
+            内容.append(self._解码MT5日志(新增字节))
+        return "\n".join(内容)
+
     def _准备启动配置(self, 运行配置: Path, 暂存目录: Path) -> tuple[Path, str]:
         """以唯一配置文件对照 Z 盘与历史 C 盘启动路径。
 
@@ -601,11 +693,11 @@ class 单实例MT5探测执行器:
             证据.write_bytes(运行配置.read_bytes())
             return 运行配置, self._mac路径转WineZ盘(运行配置)
 
-        报告名称 = self._配置报告名称(运行配置)
+        报告名称 = self._配置报告名称(运行配置) if "Report=" in 运行配置.read_text(encoding="utf-8") else None
         # 后台回收只能操作命令行带有本轮暂存身份的独立 PGID。不能只使用
         # Report 名称（它是路径哈希的截断值），否则宿主异常退出后无法
         # 精确认领这条 Wine/MT5 链路。
-        配置文件名 = f"{暂存目录.name}-{报告名称}.ini"
+        配置文件名 = f"{暂存目录.name}-{报告名称 or 'login'}.ini"
         C盘配置 = self.Wine前缀 / "drive_c/bt" / 配置文件名
         if C盘配置.exists() or C盘配置.is_symlink():
             raise ValueError(f"拒绝覆盖前缀内既有 MT5 启动配置: {C盘配置}")
