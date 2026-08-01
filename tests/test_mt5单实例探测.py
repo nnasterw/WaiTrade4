@@ -11,6 +11,7 @@ from wt4.mt5单实例探测 import (
     解析MT5实际测试区间,
     解析MT5代理同步诊断,
     核验离线代理隔离结果,
+    核验离线仅登录隔离结果,
     解析MT5生命周期,
     核验MT5严格SOCKS5链路,
     解析MT5连接端点,
@@ -144,7 +145,61 @@ def test_仅登录同步探测封存未同步诊断并精确回收(tmp_path, mon
     assert 结果.状态 is 实验状态.能力探测已完成
     assert 进程.已终止 is True
     assert 结果.结果["MT5代理同步诊断"]["结论"] == "SOCKS5已连接但MT5交易服务器未同步"
+    assert 结果.结果["等待期间观察到离线阻断"] is False
     assert (暂存 / "mt5-仅登录.ini").is_file()
+
+
+def test_仅登录离线探测命中阻断后提前回收(tmp_path, monkeypatch) -> None:
+    配置, wine, 前缀, 暂存 = _配置与目录(tmp_path)
+    配置 = replace(配置, 代理地址="127.0.0.1:1")
+
+    class _进程:
+        def __init__(self):
+            self.标准输出 = 暂存 / "后台-stdout.txt"
+            self.标准错误 = 暂存 / "后台-stderr.txt"
+            self.标准输出.write_text("", encoding="utf-8")
+            self.标准错误.write_text("", encoding="utf-8")
+            (暂存 / "后台-归属.json").write_text("{}", encoding="utf-8")
+            self.已终止 = False
+
+        def 终止自有进程组(self):
+            self.已终止 = True
+
+        def 等待(self, _秒数):
+            return 0
+
+        def 终止自有Wine服务(self):
+            return ()
+
+        def 输出文本(self):
+            return ("", "")
+
+    进程 = _进程()
+    monkeypatch.setattr("wt4.mt5单实例探测.MT5后台进程.启动", lambda *_: 进程)
+    monkeypatch.setattr(
+        单实例MT5探测执行器,
+        "_暂存新增日志文本",
+        lambda *_: "DG\t0\t20:23:44.439\tProxy\tconnecting through SOCKS5 proxy 127.0.0.1:1",
+    )
+    monkeypatch.setattr(
+        单实例MT5探测执行器,
+        "_保留本次日志证据",
+        lambda self, 暂存目录, _运行前: (
+            (暂存目录 / "MT5日志证据.txt").write_text(
+                "DG\t0\t20:23:44.439\tProxy\tconnecting through SOCKS5 proxy 127.0.0.1:1",
+                encoding="utf-8",
+            ),
+            "MT5日志证据.txt",
+        )[1],
+    )
+
+    结果 = 单实例MT5探测执行器(
+        配置, wine, 前缀, 5, 离线代理隔离=True, 启动配置路径模式="前缀内C盘"
+    ).执行仅登录同步(_输入(), 暂存)
+
+    assert 进程.已终止 is True
+    assert 结果.结果["等待期间观察到离线阻断"] is True
+    assert 结果.结果["离线代理隔离核验"]["通过"] is True
 
 
 def test_前缀内C盘启动配置保持唯一且不覆盖历史文件(tmp_path) -> None:
@@ -304,6 +359,29 @@ def test_离线代理隔离缺少代理或未同步证据时不能冒充边界�
 
     assert 结果["通过"] is False
     assert 结果["结论"] == "离线代理隔离证据不足"
+
+
+def test_离线仅登录隔离接受命中不可用代理且未授权的运行() -> None:
+    assert 核验离线仅登录隔离结果(
+        "DG\t0\t20:23:44.439\tProxy\tconnecting through SOCKS5 proxy 127.0.0.1:1",
+        "127.0.0.1:1",
+    ) == {
+        "通过": True,
+        "结论": "离线仅登录未完成MT5交易服务器授权",
+        "原因": None,
+    }
+
+
+def test_离线仅登录隔离拒绝出现授权或同步的运行() -> None:
+    结果 = 核验离线仅登录隔离结果(
+        "Proxy\tconnecting through SOCKS5 proxy 127.0.0.1:1\n"
+        "Network\tauthorized on Exness-MT5Trial5 through Access Point #5\n"
+        "Network\tterminal synchronized with Exness Technologies Ltd",
+        "127.0.0.1:1",
+    )
+
+    assert 结果["通过"] is False
+    assert 结果["结论"] == "离线代理下仍出现MT5交易服务器授权或同步"
 
 
 def test_日志解码同时保留_utf8_tester_和_utf16le_terminal_证据() -> None:
