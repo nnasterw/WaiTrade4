@@ -82,10 +82,16 @@ class _场景桩:
             (审计目录 / "opening_risk.csv").write_text(
                 "deal_id,time,equity,initial_risk,open_initial_risk\n"
                 f"2,{开始} 00:00:01,300,1,1\n4,2025.02.01 00:00:01,301,1,1\n", encoding="utf-8")
+        成本证据 = 暂存目录 / f"{场景}-MT5成本证据.log"
+        成本证据.write_text(f"MT5 native cost setting: {场景}\n", encoding="utf-8")
         return 正式场景结果(
             报告路径=报告, 审计目录=审计目录 if 场景 == "样本外" else None,
             极端压力风险通过=场景 == "压力",
             实际二进制哈希=输入.二进制哈希,
+            工件={成本证据.name: sha256(成本证据.read_bytes()).hexdigest()},
+            成本机制="MT5原生成本能力已实锤",
+            成本输入={"MT5测试成本配置": 场景},
+            成本证据工件=(成本证据.name,),
         )
 
 
@@ -220,6 +226,45 @@ def test_正式单期拒绝复用样本外报告冒充压力报告(tmp_path: Pat
 
     assert 结果.状态 is 实验状态.治理无效
     assert "报告内容重复" in str(结果.结果["原因"])
+
+
+def test_正式单期缺少实锤成本情景证据不得形成评分原料(tmp_path: Path) -> None:
+    @dataclass
+    class 未实锤成本场景(_场景桩):
+        def 运行(self, 场景: str, 输入: 实验输入, 暂存目录: Path, 参数路径: Path, 审计目录: Path) -> 正式场景结果:
+            结果 = super().运行(场景, 输入, 暂存目录, 参数路径, 审计目录)
+            return 正式场景结果(
+                报告路径=结果.报告路径, 审计目录=结果.审计目录,
+                极端压力风险通过=结果.极端压力风险通过, 实际二进制哈希=结果.实际二进制哈希,
+            )
+
+    执行器 = 正式BTC单期执行器(_配置(tmp_path), 未实锤成本场景(), lambda *_: {"通过": True})
+    暂存 = tmp_path / "run"
+    暂存.mkdir()
+
+    结果 = 执行器.执行(_输入(), 暂存)
+
+    assert 结果.状态 is 实验状态.执行无效
+    assert "成本" in str(结果.结果["原因"])
+
+
+def test_正式单期拒绝三个场景复用相同成本输入(tmp_path: Path) -> None:
+    @dataclass
+    class 相同成本场景(_场景桩):
+        def 运行(self, 场景: str, 输入: 实验输入, 暂存目录: Path, 参数路径: Path, 审计目录: Path) -> 正式场景结果:
+            结果 = super().运行(场景, 输入, 暂存目录, 参数路径, 审计目录)
+            return 正式场景结果(
+                **{**结果.__dict__, "成本输入": {"MT5测试成本配置": "同一份"}}
+            )
+
+    执行器 = 正式BTC单期执行器(_配置(tmp_path), 相同成本场景(), lambda *_: {"通过": True})
+    暂存 = tmp_path / "run"
+    暂存.mkdir()
+
+    结果 = 执行器.执行(_输入(), 暂存)
+
+    assert 结果.状态 is 实验状态.执行无效
+    assert "成本输入相同" in str(结果.结果["原因"])
 
 
 def test_非正式BTC输入不启动正式场景(tmp_path: Path) -> None:

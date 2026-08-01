@@ -74,6 +74,48 @@ class MT5报告摘要:
     成交: tuple[成交明细, ...]
 
 
+def 统计订单异常(报告: MT5报告摘要) -> int:
+    """从 Orders / Deals 的可验证事实统计正式评分不得忽略的异常。
+
+    MT5 的平仓成交可能引用一个未出现在 Orders 表中的平仓订单，因此不能
+    把所有 ``out`` 的订单号都强行关联到开仓订单。这里仅统计报告本身可以
+    明确证明的异常：未成交订单、无对应开仓订单的入场成交、入场方向或
+    手数不一致，以及期末仍未平的净成交量。
+    """
+    异常 = 0
+    订单索引 = {订单.订单号: 订单 for 订单 in 报告.订单}
+    已入场手数: dict[int, Decimal] = {}
+    入场总手数 = Decimal("0")
+    出场总手数 = Decimal("0")
+
+    for 订单 in 报告.订单:
+        if 订单.状态.strip().lower() != "filled":
+            异常 += 1
+
+    for 成交 in 报告.成交:
+        if 成交.类型 == "balance":
+            continue
+        assert 成交.手数 is not None
+        if 成交.方向 == "in":
+            入场总手数 += 成交.手数
+            订单 = 订单索引.get(成交.订单号)
+            if 订单 is None:
+                异常 += 1
+                continue
+            if 订单.状态.strip().lower() != "filled" or 成交.类型 != 订单.类型:
+                异常 += 1
+            已入场手数[订单.订单号] = 已入场手数.get(订单.订单号, Decimal("0")) + 成交.手数
+        elif 成交.方向 == "out":
+            出场总手数 += 成交.手数
+
+    for 订单 in 报告.订单:
+        if 订单.状态.strip().lower() == "filled" and 已入场手数.get(订单.订单号, Decimal("0")) != 订单.手数:
+            异常 += 1
+    if 入场总手数 != 出场总手数:
+        异常 += 1
+    return 异常
+
+
 class _表格解析器(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)

@@ -10,7 +10,7 @@ from typing import Any
 
 from wt4.账本 import 追加式账本
 from wt4.正式验收工件 import 读取逐tick权益工件
-from wt4.mt5报告 import MT5报告摘要
+from wt4.mt5报告 import MT5报告摘要, 统计订单异常
 from wt4.验收 import 硬门槛结果
 
 
@@ -68,7 +68,7 @@ def 从正式MT5工件构造评分原料(
         移除最佳月后压力期望=sum(压力去最佳月, Decimal("0")) / Decimal(len(压力去最佳月)),
         月度正收益比例=Decimal(正收益月数) / Decimal(len(月度收益)),
         证据完整=True,
-        订单异常数=0,
+        订单异常数=sum(统计订单异常(报告) for 报告 in (样本外报告, 压力报告, 无摩擦报告)),
     )
 
 

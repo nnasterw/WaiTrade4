@@ -43,6 +43,7 @@ from wt4.编排 import (
 
 _专家顾问 = r"WaiTrade4\BTC订单块分层风控"
 _场景报告名 = {"样本外": "报告.html", "压力": "压力报告.html", "无摩擦": "无摩擦报告.html"}
+_成本情景 = frozenset(_场景报告名)
 
 
 @dataclass(frozen=True)
@@ -76,7 +77,7 @@ class BTC正式批次运行配置:
     """真实正式批次的单一入口配置。
 
     调用方只能提供新的专属 Prefix、真实数据/成本快照及明确的账本根目录。
-    入口先核验 SOCKS5 TLS，再部署、编译和冻结输入，最后才依次运行四期；
+    入口先核验 SOCKS5 TCP CONNECT，再部署、编译和冻结输入，最后才依次运行四期；
     不存在手工拼装输入后绕过实际 EX5 的分支。
     """
 
@@ -122,7 +123,7 @@ def 准备BTC正式验收批次(配置: BTC正式批次准备配置) -> BTC正�
 class BTC正式单期配置:
     """正式单期的网络前置与审计根目录。
 
-    代理地址是显式配置而非固定端口；TLS 前置失败时本执行器不会调用
+    代理地址是显式配置而非固定端口；SOCKS5 TCP CONNECT 前置失败时本执行器不会调用
     场景运行器，因而不存在直连降级路径。实际 MT5 的部署、编译和启动
     由隔离场景运行器实现，且必须在其内部继续保持禁止直连沙箱。
     """
@@ -144,6 +145,11 @@ class 正式场景结果:
     # 底层 MT5 运行会产生启动配置、代理配置、日志等证据；正式执行器必须
     # 原样声明它们，不能只拿走报告后在归档前留下未声明文件。
     工件: dict[str, str] | None = None
+    # 成本情景不得由报告文件名或人工填写的净收益冒充。每个场景必须声明
+    # 已实锤的 MT5 原生成本输入，以及本轮可复核的 MT5 输出证据工件。
+    成本机制: str | None = None
+    成本输入: dict[str, str] | None = None
+    成本证据工件: tuple[str, ...] | None = None
 
 
 class 正式场景运行器(Protocol):
@@ -329,6 +335,7 @@ class 正式BTC单期执行器:
             实际二进制哈希 = {结果.实际二进制哈希 for 结果 in 场景结果.values()}
             if None in 实际二进制哈希 or 实际二进制哈希 != {输入.二进制哈希}:
                 return self._无效(实验状态.治理无效, "正式场景实际加载二进制哈希与冻结实验输入不一致")
+            self._核验成本情景证据(场景结果, 暂存目录)
             报告 = {场景: self._核验报告(输入, 场景, 结果.报告路径, 暂存目录) for 场景, 结果 in 场景结果.items()}
             报告哈希 = {场景: sha256(结果.报告路径.read_bytes()).hexdigest() for 场景, 结果 in 场景结果.items()}
             if len(set(报告哈希.values())) != len(报告哈希):
@@ -366,6 +373,14 @@ class 正式BTC单期执行器:
                     "代理前置探测": 代理探测, "冻结来源标识": 候选.冻结来源标识,
                     "正式运行参数哈希": {场景: 参数.运行哈希 for 场景, 参数 in 参数组.items()},
                     "实际加载二进制哈希": 输入.二进制哈希,
+                    "成本情景": {
+                        场景: {
+                            "机制": 结果.成本机制,
+                            "输入": dict(结果.成本输入 or {}),
+                            "证据工件": list(结果.成本证据工件 or ()),
+                        }
+                        for 场景, 结果 in 场景结果.items()
+                    },
                 },
                 验收输入=验收输入,
                 评分证据工件=("压力报告.html", "无摩擦报告.html"),
@@ -411,6 +426,43 @@ class 正式BTC单期执行器:
         权益, 风险 = 暂存目录 / "逐tick权益.json", 暂存目录 / "开仓风险.json"
         转换MT5审计CSV(原件目录 / "equity.csv", 原件目录 / "opening_risk.csv", 权益, 风险)
         return 权益, 风险
+
+    @staticmethod
+    def _核验成本情景证据(场景结果: dict[str, 正式场景结果], 暂存目录: Path) -> None:
+        """拒绝将三份同成本报告伪装为压力/无摩擦评分证据。
+
+        具体 MT5 原生成本开关须先由一期能力实验实锤；在此之前真实运行器
+        无法提供下面的输入及输出工件，正式链必须 fail-closed。
+        """
+        if set(场景结果) != _成本情景:
+            raise ValueError("正式成本情景不完整")
+        输入指纹: set[tuple[tuple[str, str], ...]] = set()
+        for 场景, 结果 in 场景结果.items():
+            输入 = 结果.成本输入
+            证据 = 结果.成本证据工件
+            if 结果.成本机制 != "MT5原生成本能力已实锤" or not isinstance(输入, dict) or not 输入:
+                raise ValueError(f"{场景}缺少已实锤的MT5原生成本输入")
+            if any(not isinstance(键, str) or not 键 or not isinstance(值, str) or not 值 for 键, 值 in 输入.items()):
+                raise ValueError(f"{场景}成本输入格式无效")
+            if not 证据 or 结果.工件 is None:
+                raise ValueError(f"{场景}缺少MT5成本输出证据工件")
+            for 名称 in 证据:
+                相对路径 = Path(名称) if isinstance(名称, str) else None
+                路径 = 暂存目录 / 相对路径 if 相对路径 is not None else None
+                if (
+                    not 名称
+                    or 相对路径 is None
+                    or 相对路径.is_absolute()
+                    or ".." in 相对路径.parts
+                    or 名称 not in 结果.工件
+                    or not 路径.is_file()
+                    or 路径.is_symlink()
+                    or sha256(路径.read_bytes()).hexdigest() != 结果.工件[名称]
+                ):
+                    raise ValueError(f"{场景}成本证据未被本轮工件清单哈希")
+            输入指纹.add(tuple(sorted(输入.items())))
+        if len(输入指纹) != len(_成本情景):
+            raise ValueError("正式三场景成本输入相同，拒绝伪造成本保留率")
 
 
 def 运行BTC正式验收批次(配置: BTC正式批次运行配置) -> 正式策略验收批次结果:

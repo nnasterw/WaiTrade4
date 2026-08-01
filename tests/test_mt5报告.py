@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from wt4.mt5报告 import MT5报告错误, 报告期望, 解析MT5报告
+from wt4.mt5报告 import MT5报告错误, 报告期望, 解析MT5报告, 统计订单异常
 from wt4.正式验收工件 import 完成正式验收风险桥接, 正式验收工件错误, 读取开仓风险工件, 读取逐tick权益工件
 from wt4.风险 import 重演MT5已实现余额, 重演MT5成交风险
 from wt4.验收 import 从MT5报告构造验收输入
@@ -62,6 +62,18 @@ def test_严格解析报告及orders明细(tmp_path: Path) -> None:
     assert 验收输入.封存净收益 == Decimal("12.50")
     assert 验收输入.已实现余额重演通过
     assert not 验收输入.权益风险证据完整
+    assert 统计订单异常(结果) == 0
+
+
+def test_订单异常统计覆盖拒绝订单_孤儿入场和未平仓(tmp_path: Path) -> None:
+    拒绝订单 = _报告().replace("<td>filled</td><td>x</td></tr>", "<td>rejected</td><td>x</td></tr>", 1)
+    assert 统计订单异常(解析MT5报告(_写报告(tmp_path, 拒绝订单), _期望())) == 2
+
+    孤儿入场 = _报告().replace("<td>2</td><td>0.00</td><td>0.00</td><td>0.00</td><td>300.00</td>", "<td>9</td><td>0.00</td><td>0.00</td><td>0.00</td><td>300.00</td>", 1)
+    assert 统计订单异常(解析MT5报告(_写报告(tmp_path, 孤儿入场), _期望())) == 2
+
+    未平仓 = _报告().replace("<td>buy</td><td>out</td><td>0.01</td>", "<td>buy</td><td>in</td><td>0.01</td>")
+    assert 统计订单异常(解析MT5报告(_写报告(tmp_path, 未平仓), _期望())) == 2
 
 
 def test_拒绝无bom或非utf16le报告(tmp_path: Path) -> None:
