@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from hashlib import sha256
 import json
 from pathlib import Path
 from threading import Event
+from time import monotonic, sleep
 
 import pytest
 
 from wt4.experiment import 实验输入
-from wt4.评分 import 评分原料
 from wt4.验收 import 验收输入
 from wt4.mt5报告 import 报告期望, 解析MT5报告
 from wt4.正式验收工件 import 完成正式验收风险桥接
@@ -61,15 +61,6 @@ def _验收输入() -> 验收输入:
     )
 
 
-def _评分原料() -> 评分原料:
-    return 评分原料(
-        样本外净收益=Decimal("10"), 压力净收益=Decimal("2"), 成本保留率=Decimal("0.5"),
-        最大回撤=Decimal("0.1"), 最大单笔贡献=Decimal("0.2"),
-        移除最佳月后压力期望=Decimal("1"), 月度正收益比例=Decimal("0.6"),
-        证据完整=True, 订单异常数=0,
-    )
-
-
 class _成功执行器:
     def 执行(self, 输入: 实验输入, 暂存目录: Path) -> 执行结果:
         报告 = 暂存目录 / "报告.txt"
@@ -103,6 +94,7 @@ class _正式成功执行器:
         self.执行次数 += 1
         开始日 = 输入.起始日.replace("-", ".")
         结束日 = 输入.结束日.replace("-", ".")
+        第二个月 = (date.fromisoformat(输入.起始日) + timedelta(days=31)).strftime("%Y.%m.%d")
         报告 = 暂存目录 / "报告.html"
         报告.write_bytes(b"\xff\xfe" + f'''<html><body><table>
 <tr><td>Expert:</td><td>WaiTrade_OB</td></tr><tr><td>Symbol:</td><td>BTCUSDm</td></tr>
@@ -139,9 +131,28 @@ class _正式成功执行器:
             验收 = 验收.__class__(
                 **{**验收.__dict__, "压力封存净收益": Decimal("-1")}
             )
-        工件 = {路径.name: sha256(路径.read_bytes()).hexdigest() for 路径 in (报告, 权益, 成交风险, 风险)}
+        压力报告 = 暂存目录 / "压力报告.html"
+        压力报告.write_bytes(b"\xff\xfe" + f'''<html><body><table>
+<tr><td>Expert:</td><td>WaiTrade_OB</td></tr><tr><td>Symbol:</td><td>BTCUSDm</td></tr>
+<tr><td>Period:</td><td>M1 ({开始日} - {结束日})</td></tr><tr><td>Initial Deposit:</td><td>300.00</td></tr>
+<tr><td>History Quality:</td><td>100% real ticks</td></tr><tr><td>Total Net Profit:</td><td>2.00</td></tr>
+<tr><td>Balance Drawdown Maximal:</td><td>0.00 (0.00%)</td></tr><tr><td>Equity Drawdown Maximal:</td><td>11.00 (3.50%)</td></tr>
+<tr><td>Profit Factor:</td><td>1.25</td></tr><tr><td>Total Trades:</td><td>2</td></tr><tr><td>Total Deals:</td><td>4</td></tr></table>
+<table><tr><td>Orders</td></tr><tr><td>Open Time</td><td>Order</td><td>Symbol</td><td>Type</td><td>Volume</td><td>Price</td><td>S / L</td><td>T / P</td><td>Time</td><td>State</td><td>Comment</td></tr>
+<tr><td>{开始日} 00:00:00</td><td>2</td><td>BTCUSDm</td><td>sell</td><td>0.01 / 0.01</td><td>99000.00</td><td>99063.02</td><td></td><td>{开始日} 00:00:00</td><td>filled</td><td>x</td></tr>
+<tr><td>{第二个月} 00:00:00</td><td>4</td><td>BTCUSDm</td><td>sell</td><td>0.01 / 0.01</td><td>99000.00</td><td>99063.02</td><td></td><td>{第二个月} 00:00:00</td><td>filled</td><td>x</td></tr>
+<tr><td>Deals</td></tr><tr><td>Time</td><td>Deal</td><td>Symbol</td><td>Type</td><td>Direction</td><td>Volume</td><td>Price</td><td>Order</td><td>Commission</td><td>Swap</td><td>Profit</td><td>Balance</td><td>Comment</td></tr>
+<tr><td>{开始日} 00:00:00</td><td>1</td><td></td><td>balance</td><td></td><td></td><td></td><td></td><td>0.00</td><td>0.00</td><td>300.00</td><td>300.00</td><td></td></tr>
+<tr><td>{开始日} 00:00:01</td><td>2</td><td>BTCUSDm</td><td>sell</td><td>in</td><td>0.01</td><td>99000.00</td><td>2</td><td>0.00</td><td>0.00</td><td>0.00</td><td>300.00</td><td>x</td></tr>
+<tr><td>{开始日} 00:00:02</td><td>3</td><td>BTCUSDm</td><td>buy</td><td>out</td><td>0.01</td><td>98990.00</td><td>3</td><td>0.00</td><td>0.00</td><td>1.00</td><td>301.00</td><td>x</td></tr>
+<tr><td>{第二个月} 00:00:01</td><td>4</td><td>BTCUSDm</td><td>sell</td><td>in</td><td>0.01</td><td>99000.00</td><td>4</td><td>0.00</td><td>0.00</td><td>0.00</td><td>301.00</td><td>x</td></tr>
+<tr><td>{第二个月} 00:00:02</td><td>5</td><td>BTCUSDm</td><td>buy</td><td>out</td><td>0.01</td><td>98990.00</td><td>5</td><td>0.00</td><td>0.00</td><td>1.00</td><td>302.00</td><td>x</td></tr></table></body></html>'''.encode("utf-16le"))
+        无摩擦报告 = 暂存目录 / "无摩擦报告.html"
+        无摩擦报告.write_bytes(报告.read_bytes().replace(b"12.50", b"25.00").replace(b"312.50", b"325.00"))
+        工件 = {路径.name: sha256(路径.read_bytes()).hexdigest() for 路径 in (报告, 压力报告, 无摩擦报告, 权益, 成交风险, 风险)}
         return 执行结果(
-            实验状态.已归档, 工件, {}, 验收输入=验收, 评分原料=_评分原料(),
+            实验状态.已归档, 工件, {}, 验收输入=验收,
+            评分证据工件=(压力报告.name, 无摩擦报告.name),
             风险证据工件=None if self.缺少风险证据 else (权益.name, 成交风险.name, 风险.name),
             报告工件=(报告.name, "WaiTrade_OB", "M1"),
         )
@@ -163,6 +174,14 @@ class _占位风险工件执行器(_正式成功执行器):
             路径.write_text(json.dumps(内容, ensure_ascii=False), encoding="utf-8")
             工件[名称] = sha256(路径.read_bytes()).hexdigest()
         return replace(结果, 工件=工件)
+
+
+class _复用样本外报告评分执行器(_正式成功执行器):
+    """评分情景不能复用样本外报告来伪造独立压力证据。"""
+
+    def 执行(self, 输入: 实验输入, 暂存目录: Path) -> 执行结果:
+        结果 = super().执行(输入, 暂存目录)
+        return replace(结果, 评分证据工件=("报告.html", "无摩擦报告.html"))
 
 
 class _漏报开仓风险执行器(_正式成功执行器):
@@ -334,6 +353,11 @@ def test_后台队列严格串行_故障不阻塞后续任务_可定向取消(tm
     乙 = 队列.提交(_输入({"任务": "乙"}), _留痕执行器("乙", 顺序, 失败=True))
     丙 = 队列.提交(_输入({"任务": "丙"}), _留痕执行器("丙", 顺序))
 
+    # ``提交`` 的契约是已可靠入队，而不是调用返回前工作线程已经取得
+    # CPU。因此等待明确的运行态，避免把线程调度竞态误判为队列失效。
+    截止 = monotonic() + 5
+    while 队列.快照(甲).状态 is 后台任务状态.已排队 and monotonic() < 截止:
+        sleep(0.01)
     assert 队列.快照(甲).状态 is 后台任务状态.运行中
     assert 队列.取消(丙, "验证定向取消")
     assert not 队列.取消(甲)
@@ -383,7 +407,7 @@ def test_后台排队后篡改调用者输入不会分裂实验身份或账本(t
     assert not 账本.事件(输入.身份)
 
 
-def test_正式验收必须提供可独立评估的硬门与评分原料(tmp_path) -> None:
+def test_正式验收必须提供可独立评估的硬门与评分证据(tmp_path) -> None:
     账本 = 追加式账本(tmp_path / "账本.sqlite")
     编排器 = 中央实验编排器(账本, tmp_path / "暂存", tmp_path / "工件")
     输入 = _正式输入("2024-07-01", "2024-12-31")
@@ -425,6 +449,17 @@ def test_正式验收拒绝任意JSON占位风险工件(tmp_path) -> None:
 
     assert 结果.状态 is 实验状态.治理无效
     assert "封存逐tick权益" in 账本.事件(输入.身份)[-1].内容["原因"]
+
+
+def test_正式验收拒绝复用样本外报告伪造评分证据(tmp_path) -> None:
+    账本 = 追加式账本(tmp_path / "账本.sqlite")
+    编排器 = 中央实验编排器(账本, tmp_path / "暂存", tmp_path / "工件")
+    输入 = _正式输入("2024-07-01", "2024-12-31")
+
+    结果 = 编排器.运行(输入, _复用样本外报告评分执行器())
+
+    assert 结果.状态 is 实验状态.治理无效
+    assert "评分证据无效" in 账本.事件(输入.身份)[-1].内容["原因"]
 
 
 def test_正式验收拒绝风险工件遗漏原始报告开仓(tmp_path) -> None:

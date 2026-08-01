@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 from hashlib import sha256
 import json
@@ -8,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from wt4.账本 import 追加式账本
+from wt4.正式验收工件 import 读取逐tick权益工件
+from wt4.mt5报告 import MT5报告摘要
 from wt4.验收 import 硬门槛结果
 
 
@@ -22,6 +25,83 @@ class 评分原料:
     月度正收益比例: Decimal
     证据完整: bool
     订单异常数: int
+
+
+def 从正式MT5工件构造评分原料(
+    样本外报告: MT5报告摘要,
+    压力报告: MT5报告摘要,
+    无摩擦报告: MT5报告摘要,
+    *,
+    逐tick权益工件: Path,
+) -> 评分原料:
+    """只从已解析的三份同口径 MT5 报告和逐 tick 工件推导评分事实。
+
+    样本外、压力、无摩擦三个情景必须拥有相同的交易身份；缺少任一
+    原始报告时拒绝评分，而不是由执行器填入一个未验证的 Decimal。
+    """
+    _核验评分报告同口径(样本外报告, 压力报告, "压力")
+    _核验评分报告同口径(样本外报告, 无摩擦报告, "无摩擦")
+    权益 = 读取逐tick权益工件(逐tick权益工件)
+    if not 权益:
+        raise ValueError("评分缺少逐tick权益证据")
+    月度收益 = _按月已实现净收益(样本外报告)
+    压力月度收益 = _按月已实现净收益(压力报告)
+    if not 月度收益 or not 压力月度收益:
+        raise ValueError("评分报告缺少可聚合的已实现成交")
+    if 无摩擦报告.净利润 <= 0:
+        raise ValueError("无摩擦报告净收益必须为正")
+    压力去最佳月 = list(压力月度收益.values())
+    if len(压力去最佳月) < 2:
+        raise ValueError("压力报告至少需要两个月的已实现收益")
+    压力去最佳月.remove(max(压力去最佳月))
+    正收益月数 = sum(收益 > 0 for 收益 in 月度收益.values())
+    已平仓贡献 = _已平仓净贡献(样本外报告)
+    正贡献总额 = sum((值 for 值 in 已平仓贡献 if 值 > 0), Decimal("0"))
+    if 正贡献总额 <= 0:
+        raise ValueError("样本外报告没有正向已平仓贡献")
+    return 评分原料(
+        样本外净收益=样本外报告.净利润,
+        压力净收益=压力报告.净利润,
+        成本保留率=样本外报告.净利润 / 无摩擦报告.净利润,
+        最大回撤=样本外报告.最大权益回撤比例,
+        最大单笔贡献=max(已平仓贡献) / 正贡献总额,
+        移除最佳月后压力期望=sum(压力去最佳月, Decimal("0")) / Decimal(len(压力去最佳月)),
+        月度正收益比例=Decimal(正收益月数) / Decimal(len(月度收益)),
+        证据完整=True,
+        订单异常数=0,
+    )
+
+
+def _核验评分报告同口径(基准: MT5报告摘要, 候选: MT5报告摘要, 名称: str) -> None:
+    if 基准.建模方式 != "real ticks":
+        raise ValueError("样本外评分报告并非real ticks")
+    字段 = ("专家", "品种", "周期", "开始日", "结束日", "初始资金", "建模方式")
+    if any(getattr(基准, 字段名) != getattr(候选, 字段名) for 字段名 in 字段):
+        raise ValueError(f"{名称}评分报告与样本外报告身份不一致")
+    if 候选.建模方式 != "real ticks":
+        raise ValueError(f"{名称}评分报告并非real ticks")
+
+
+def _按月已实现净收益(报告: MT5报告摘要) -> dict[str, Decimal]:
+    月度: dict[str, Decimal] = {}
+    for 成交 in 报告.成交:
+        if 成交.类型 == "balance":
+            continue
+        月份 = datetime.strptime(成交.时间, "%Y.%m.%d %H:%M:%S").strftime("%Y-%m")
+        月度[月份] = 月度.get(月份, Decimal("0")) + 成交.佣金 + 成交.隔夜利息 + 成交.盈亏
+    return 月度
+
+
+def _已平仓净贡献(报告: MT5报告摘要) -> list[Decimal]:
+    """以 MT5 out deal 为不可再分的已实现平仓贡献，费用一并计入。"""
+    贡献 = [
+        成交.佣金 + 成交.隔夜利息 + 成交.盈亏
+        for 成交 in 报告.成交
+        if 成交.方向 == "out"
+    ]
+    if not 贡献:
+        raise ValueError("评分报告缺少已平仓成交")
+    return 贡献
 
 
 @dataclass(frozen=True)
