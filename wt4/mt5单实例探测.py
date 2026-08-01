@@ -411,6 +411,7 @@ class 单实例MT5探测执行器:
         Mihomo日志路径: Path | None = None,
         离线代理隔离: bool = False,
         启动配置路径模式: str = "外置Z盘",
+        报告封存名称: str = "报告.html",
     ) -> None:
         if not Wine命令.is_file():
             raise ValueError(f"Wine 命令不存在: {Wine命令}")
@@ -424,6 +425,9 @@ class 单实例MT5探测执行器:
         self.超时秒数 = 超时秒数
         self.Mihomo日志路径 = Mihomo日志路径
         self.离线代理隔离 = 离线代理隔离
+        if not re.fullmatch(r"[^/\\]+\.html", 报告封存名称):
+            raise ValueError("报告封存名称必须是普通 .html 文件名")
+        self.报告封存名称 = 报告封存名称
         if 启动配置路径模式 not in {"外置Z盘", "前缀内C盘"}:
             raise ValueError("MT5 启动配置路径模式仅允许外置Z盘或前缀内C盘")
         self.启动配置路径模式 = 启动配置路径模式
@@ -544,7 +548,7 @@ class 单实例MT5探测执行器:
             return 执行结果(
                 结果.状态.执行无效,
                 {},
-                {**结果数据, "原因": "缺少 MT5 工件", "缺失": ["报告.html"]},
+                {**结果数据, "原因": "缺少 MT5 工件", "缺失": [self.报告封存名称]},
             )
         if 生命周期["历史数据不可用标记"]:
             return 执行结果(
@@ -650,7 +654,7 @@ class 单实例MT5探测执行器:
             raise ValueError(f"MT5 输出了多个同名报告，拒绝选择: {候选}")
         if not 候选:
             return ()
-        目标 = 暂存目录 / "报告.html"
+        目标 = 暂存目录 / self.报告封存名称
         if 目标.exists():
             raise ValueError("报告封存目标已存在")
         目标.write_bytes(候选[0].read_bytes())

@@ -11,6 +11,8 @@ from wt4.experiment import 实验输入, 核验正式策略验收单期
 from wt4.mt5报告 import 报告期望, 解析MT5报告
 from wt4.mt5审计 import 转换MT5审计CSV
 from wt4.mt5单实例探测 import 通过SOCKS5探测TLS端点
+from wt4.mt5单实例探测 import 单实例MT5探测执行器
+from wt4.mt5探测 import MT5短窗口探测配置
 from wt4.正式验收工件 import 完成正式验收风险桥接
 from wt4.策略实现 import (
     BTC候选策略目录,
@@ -53,6 +55,9 @@ class 正式场景结果:
     # 场景运行器必须返回目标隔离终端内受控编译产生的 EX5 哈希。
     # 正式输入中的二进制哈希只在这里得到实际加载证据，不能由调用方自报。
     实际二进制哈希: str | None = None
+    # 底层 MT5 运行会产生启动配置、代理配置、日志等证据；正式执行器必须
+    # 原样声明它们，不能只拿走报告后在归档前留下未声明文件。
+    工件: dict[str, str] | None = None
 
 
 class 正式场景运行器(Protocol):
@@ -64,6 +69,120 @@ class 正式场景运行器(Protocol):
         参数路径: Path,
         审计目录: Path,
     ) -> 正式场景结果: ...
+
+
+@dataclass(frozen=True)
+class 正式MT5场景运行配置:
+    """真实正式场景使用的专属 Wine/MT5 终端。
+
+    Prefix 必须在本仓库的 ``runtime`` 下，避免正式运行误写进日常使用的
+    MT5 安装。网络边界仍交由 ``单实例MT5探测执行器`` 的 sandbox-exec
+    强制执行；此配置不提供 HTTP 或直连回退字段。
+    """
+
+    Wine命令: Path
+    Wine前缀: Path
+    终端目录: Path
+    登录账号: str
+    服务器: str
+    超时秒数: int
+    杠杆: int = 2000
+    代理地址: str = "127.0.0.1:7897"
+    Mihomo日志路径: Path | None = None
+
+
+class 真实MT5正式场景运行器:
+    """以受限单实例链路运行一个正式 BTC M5 场景。
+
+    它不编造报告或 EX5 身份：报告只能由底层 MT5 执行器从本轮唯一输出
+    收集，EX5 哈希只读取目标隔离终端实际存在的普通文件。编译和冻结输入
+    的时序仍由批次准备层负责，防止在已冻结实验身份后静默替换二进制。
+    """
+
+    def __init__(self, 配置: 正式MT5场景运行配置) -> None:
+        self.配置 = 配置
+        工作区 = Path(__file__).resolve().parent.parent
+        runtime根目录 = (工作区 / "runtime").resolve()
+        前缀 = 配置.Wine前缀.resolve()
+        终端 = 配置.终端目录.resolve()
+        if not 配置.Wine命令.is_file() or not 前缀.is_dir() or not 终端.is_dir():
+            raise ValueError("正式 MT5 的 Wine、前缀或终端目录无效")
+        try:
+            前缀.relative_to(runtime根目录)
+            终端.relative_to(前缀 / "drive_c")
+        except ValueError as 异常:
+            raise ValueError("正式 MT5 Wine Prefix 必须位于本仓库 runtime 且终端在其 drive_c 内") from 异常
+        if 配置.超时秒数 <= 0 or not 配置.登录账号 or not 配置.服务器:
+            raise ValueError("正式 MT5 登录信息或超时无效")
+        if 配置.杠杆 <= 0 or 配置.代理地址 != "127.0.0.1:7897":
+            raise ValueError("正式 MT5 仅允许显式的 127.0.0.1:7897 SOCKS5 代理")
+
+    def 运行(
+        self,
+        场景: str,
+        输入: 实验输入,
+        暂存目录: Path,
+        参数路径: Path,
+        审计目录: Path,
+    ) -> 正式场景结果:
+        if 场景 not in _场景报告名:
+            raise ValueError(f"未知正式场景: {场景}")
+        if not 参数路径.is_file() or 参数路径.is_symlink() or 参数路径.parent.resolve() != 暂存目录.resolve():
+            raise ValueError("正式场景参数必须是本轮暂存目录中的普通文件")
+        if not (self.配置.终端目录 / "terminal64.exe").is_file():
+            raise ValueError("正式 MT5 terminal64.exe 不存在")
+        实际二进制 = self.配置.终端目录 / "MQL5/Experts/WaiTrade4/BTC订单块分层风控.ex5"
+        if not 实际二进制.is_file() or 实际二进制.is_symlink():
+            raise ValueError("正式场景缺少受控编译的实际 EX5")
+        运行前二进制哈希 = sha256(实际二进制.read_bytes()).hexdigest()
+        期望审计目录 = self.配置.终端目录 / "MQL5/Files/wt4/audit" / 审计目录.name
+        if 审计目录.resolve() != 期望审计目录.resolve():
+            raise ValueError("正式场景审计目录必须属于目标隔离终端")
+
+        场景工作目录 = 暂存目录 / f"{场景}-mt5运行"
+        if 场景工作目录.exists() or 场景工作目录.is_symlink():
+            raise ValueError("正式 MT5 场景工作目录已存在")
+        场景工作目录.mkdir()
+        场景参数路径 = 场景工作目录 / 参数路径.name
+        场景参数路径.write_bytes(参数路径.read_bytes())
+        探测配置 = MT5短窗口探测配置(
+            终端目录=self.配置.终端目录, 专家顾问=_专家顾问,
+            参数文件=场景参数路径.name, 品种="BTCUSDm", 周期="M5",
+            开始日=输入.起始日.replace("-", "."), 结束日=输入.结束日.replace("-", "."),
+            初始资金=300, 杠杆=self.配置.杠杆, 登录账号=self.配置.登录账号,
+            服务器=self.配置.服务器, 代理地址=self.配置.代理地址, 参数文件路径=场景参数路径,
+        )
+        结果 = 单实例MT5探测执行器(
+            探测配置, self.配置.Wine命令, self.配置.Wine前缀, self.配置.超时秒数,
+            self.配置.Mihomo日志路径, 启动配置路径模式="前缀内C盘",
+            报告封存名称=_场景报告名[场景],
+        ).执行(输入, 场景工作目录)
+        if 结果.状态 is not 实验状态.已归档:
+            raise ValueError(f"正式 MT5 场景未归档: {结果.结果.get('原因', 结果.状态)}")
+        来源报告 = 场景工作目录 / _场景报告名[场景]
+        目标报告 = 暂存目录 / _场景报告名[场景]
+        if not 来源报告.is_file() or 来源报告.is_symlink():
+            raise ValueError("正式 MT5 场景缺少唯一报告")
+        if 目标报告.exists():
+            raise ValueError("正式场景报告封存目标已存在")
+        运行后二进制哈希 = sha256(实际二进制.read_bytes()).hexdigest()
+        if 运行后二进制哈希 != 运行前二进制哈希:
+            raise ValueError("正式 MT5 场景运行期间 EX5 二进制发生变化")
+        目标报告.write_bytes(来源报告.read_bytes())
+        场景工件 = {
+            f"{场景工作目录.name}/{名称}": 哈希
+            for 名称, 哈希 in 结果.工件.items()
+            if 名称 != _场景报告名[场景]
+        }
+        场景工件[f"{场景工作目录.name}/{场景参数路径.name}"] = sha256(场景参数路径.read_bytes()).hexdigest()
+        来源报告.unlink()
+        场景工件[_场景报告名[场景]] = sha256(目标报告.read_bytes()).hexdigest()
+        return 正式场景结果(
+            报告路径=目标报告,
+            审计目录=审计目录 if 审计目录.is_dir() and not 审计目录.is_symlink() else None,
+            实际二进制哈希=运行前二进制哈希,
+            工件=场景工件,
+        )
 
 
 代理前置核验器 = Callable[[str, str, int], dict[str, object]]
@@ -148,6 +267,13 @@ class 正式BTC单期执行器:
                 权益, 风险, 风险限额,
             ]
             工件 = {str(路径.relative_to(暂存目录)): sha256(路径.read_bytes()).hexdigest() for 路径 in 工件路径}
+            for 场景, 场景结果项 in 场景结果.items():
+                if 场景结果项.工件 is None:
+                    continue
+                for 名称, 哈希 in 场景结果项.工件.items():
+                    if 名称 in 工件 and 工件[名称] != 哈希:
+                        raise ValueError(f"{场景}场景工件哈希与正式清单冲突: {名称}")
+                    工件[名称] = 哈希
             return 执行结果(
                 状态=实验状态.已归档, 工件=工件,
                 结果={

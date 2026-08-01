@@ -565,3 +565,15 @@ def test_报告从_mt5终端根目录封存到本轮暂存目录(tmp_path) -> No
 
     assert 证据 == ("报告.html",)
     assert (暂存 / "报告.html").read_bytes() == b"report"
+
+
+def test_报告封存允许正式场景指定独立名称(tmp_path) -> None:
+    配置, wine, 前缀, 暂存 = _配置与目录(tmp_path)
+    执行器 = 单实例MT5探测执行器(配置, wine, 前缀, 5, 报告封存名称="压力报告.html")
+    名称 = "wt4-abc123"
+    (配置.终端目录 / f"{名称}.html").write_bytes(b"report")
+
+    证据 = 执行器._收集MT5报告(名称, 暂存)
+
+    assert 证据 == ("压力报告.html",)
+    assert (暂存 / "压力报告.html").read_bytes() == b"report"

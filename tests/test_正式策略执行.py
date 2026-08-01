@@ -5,7 +5,13 @@ from hashlib import sha256
 from pathlib import Path
 
 from wt4.experiment import 实验输入
-from wt4.正式策略执行 import BTC正式单期配置, 正式BTC单期执行器, 正式场景结果
+from wt4.正式策略执行 import (
+    BTC正式单期配置,
+    正式BTC单期执行器,
+    正式场景结果,
+    正式MT5场景运行配置,
+    真实MT5正式场景运行器,
+)
 from wt4.编排 import 实验状态, 中央实验编排器
 from wt4.账本 import 追加式账本
 
@@ -146,3 +152,95 @@ def test_正式单期拒绝场景自报但未绑定实际加载二进制(tmp_pat
 
     assert 结果.状态 is 实验状态.治理无效
     assert "二进制哈希" in str(结果.结果["原因"])
+
+
+def test_真实场景运行器只接受runtime内专属wine前缀(tmp_path: Path) -> None:
+    wine = tmp_path / "wine"
+    wine.write_text("wine", encoding="utf-8")
+    前缀 = tmp_path / "shared-prefix"
+    终端 = 前缀 / "drive_c/Program Files/MetaTrader 5"
+    (终端 / "terminal64.exe").parent.mkdir(parents=True)
+    (终端 / "terminal64.exe").write_bytes(b"terminal")
+
+    try:
+        真实MT5正式场景运行器(正式MT5场景运行配置(wine, 前缀, 终端, "1", "server", 10))
+    except ValueError as 异常:
+        assert "runtime" in str(异常)
+    else:
+        raise AssertionError("共享 Wine Prefix 不得用于正式运行")
+
+
+def test_真实场景运行器封存唯一场景报告并绑定实际_ex5(tmp_path: Path, monkeypatch) -> None:
+    from wt4.编排 import 执行结果
+    from wt4.mt5单实例探测 import 单实例MT5探测执行器
+
+    runtime = Path(__file__).resolve().parents[1] / "runtime"
+    前缀 = runtime / f"test-正式场景-{tmp_path.name}"
+    终端 = 前缀 / "drive_c/Program Files/MetaTrader 5"
+    for 名称, 内容 in {
+        "terminal64.exe": b"terminal",
+        "MQL5/Experts/WaiTrade4/BTC订单块分层风控.ex5": b"actual-ex5",
+    }.items():
+        路径 = 终端 / 名称
+        路径.parent.mkdir(parents=True, exist_ok=True)
+        路径.write_bytes(内容)
+    wine = tmp_path / "wine"
+    wine.write_text("wine", encoding="utf-8")
+    暂存 = tmp_path / "run"
+    暂存.mkdir()
+    参数 = 暂存 / "正式运行参数-样本外.set"
+    参数.write_text("InpRiskPercent=3.0\n", encoding="utf-8")
+    审计 = 终端 / "MQL5/Files/wt4/audit" / ("a" * 64)
+
+    def 伪执行(self, 输入, 暂存目录):
+        (暂存目录 / self.报告封存名称).write_bytes(_报告(输入, "2.00"))
+        return 执行结果(实验状态.已归档, {}, {})
+
+    monkeypatch.setattr(单实例MT5探测执行器, "执行", 伪执行)
+    运行器 = 真实MT5正式场景运行器(
+        正式MT5场景运行配置(wine, 前缀, 终端, "1", "server", 10)
+    )
+
+    结果 = 运行器.运行("样本外", _输入(), 暂存, 参数, 审计)
+
+    assert 结果.报告路径 == 暂存 / "报告.html"
+    assert 结果.实际二进制哈希 == sha256(b"actual-ex5").hexdigest()
+    assert (暂存 / "样本外-mt5运行/正式运行参数-样本外.set").is_file()
+    assert 结果.工件 is not None
+    assert "样本外-mt5运行/报告.html" not in 结果.工件
+    assert "报告.html" in 结果.工件
+
+
+def test_真实场景运行器拒绝运行期间替换_ex5(tmp_path: Path, monkeypatch) -> None:
+    from wt4.编排 import 执行结果
+    from wt4.mt5单实例探测 import 单实例MT5探测执行器
+
+    runtime = Path(__file__).resolve().parents[1] / "runtime"
+    前缀 = runtime / f"test-正式场景-替换-{tmp_path.name}"
+    终端 = 前缀 / "drive_c/Program Files/MetaTrader 5"
+    二进制 = 终端 / "MQL5/Experts/WaiTrade4/BTC订单块分层风控.ex5"
+    for 路径, 内容 in ((终端 / "terminal64.exe", b"terminal"), (二进制, b"actual-ex5")):
+        路径.parent.mkdir(parents=True, exist_ok=True)
+        路径.write_bytes(内容)
+    wine = tmp_path / "wine"
+    wine.write_text("wine", encoding="utf-8")
+    暂存 = tmp_path / "run"
+    暂存.mkdir()
+    参数 = 暂存 / "正式运行参数-样本外.set"
+    参数.write_text("InpRiskPercent=3.0\n", encoding="utf-8")
+    审计 = 终端 / "MQL5/Files/wt4/audit" / ("b" * 64)
+
+    def 伪执行(self, 输入, 暂存目录):
+        二进制.write_bytes(b"replaced-ex5")
+        (暂存目录 / self.报告封存名称).write_bytes(_报告(输入, "2.00"))
+        return 执行结果(实验状态.已归档, {}, {})
+
+    monkeypatch.setattr(单实例MT5探测执行器, "执行", 伪执行)
+    运行器 = 真实MT5正式场景运行器(正式MT5场景运行配置(wine, 前缀, 终端, "1", "server", 10))
+
+    try:
+        运行器.运行("样本外", _输入(), 暂存, 参数, 审计)
+    except ValueError as 异常:
+        assert "EX5" in str(异常)
+    else:
+        raise AssertionError("运行中被替换的 EX5 不得形成正式场景结果")
