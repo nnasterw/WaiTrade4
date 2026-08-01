@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from hashlib import sha256
+import json
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,7 @@ from wt4.策略实现 import (
     MT5候选策略编译配置,
     受控编译BTC候选策略,
     _封存本次MetaEditor日志,
+    生成BTC正式运行参数,
 )
 
 
@@ -79,6 +81,59 @@ def test_仓库候选可被读取且不将仓库内ex5充作验收二进制() ->
 
     assert 候选.二进制哈希 is None
     assert "Experts/WaiTrade4/BTC订单块分层风控.mq5" in 候选.可执行源码哈希
+
+
+def test_正式运行参数只覆盖风险与审计标识且保留冻结来源(tmp_path: Path) -> None:
+    根目录 = _构造候选(tmp_path / "候选")
+    参数 = 根目录 / "冻结迁移/参数/V11-BTC-M5-R21.set"
+    参数.write_text(
+        "参数A=1\nInpRiskPercent=2.7\nInpWT4审计运行标识=\n参数B=2\n",
+        encoding="utf-8",
+    )
+    来源内容 = 参数.read_bytes()
+    清单 = 根目录 / "冻结迁移/来源.json"
+    内容 = json.loads(清单.read_text(encoding="utf-8"))
+    内容["文件哈希"]["参数/V11-BTC-M5-R21.set"] = sha256(来源内容).hexdigest()
+    清单.write_text(json.dumps(内容), encoding="utf-8")
+    候选 = 读取BTC候选策略(根目录)
+
+    结果 = 生成BTC正式运行参数(候选, tmp_path / "运行/正式.set", "a" * 64)
+
+    assert 结果.来源哈希 == sha256(来源内容).hexdigest()
+    assert 结果.运行路径.read_text(encoding="utf-8") == (
+        "参数A=1\nInpRiskPercent=3.0\nInpWT4审计运行标识=" + "a" * 64 + "\n参数B=2\n"
+    )
+    assert 参数.read_bytes() == 来源内容
+
+
+@pytest.mark.parametrize("审计标识", ["", "A" * 64, "a" * 63])
+def test_正式运行参数拒绝非实验身份审计标识(tmp_path: Path, 审计标识: str) -> None:
+    根目录 = _构造候选(tmp_path / "候选")
+    参数 = 根目录 / "冻结迁移/参数/V11-BTC-M5-R21.set"
+    参数.write_text("InpRiskPercent=2.7\nInpWT4审计运行标识=\n", encoding="utf-8")
+    清单 = 根目录 / "冻结迁移/来源.json"
+    内容 = json.loads(清单.read_text(encoding="utf-8"))
+    内容["文件哈希"]["参数/V11-BTC-M5-R21.set"] = sha256(参数.read_bytes()).hexdigest()
+    清单.write_text(json.dumps(内容), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="审计运行标识"):
+        生成BTC正式运行参数(读取BTC候选策略(根目录), tmp_path / "正式.set", 审计标识)
+
+
+def test_正式运行参数拒绝覆盖或缺少唯一可替换字段(tmp_path: Path) -> None:
+    根目录 = _构造候选(tmp_path / "候选")
+    参数 = 根目录 / "冻结迁移/参数/V11-BTC-M5-R21.set"
+    参数.write_text("InpRiskPercent=2.7\nInpWT4审计运行标识=\n", encoding="utf-8")
+    清单 = 根目录 / "冻结迁移/来源.json"
+    内容 = json.loads(清单.read_text(encoding="utf-8"))
+    内容["文件哈希"]["参数/V11-BTC-M5-R21.set"] = sha256(参数.read_bytes()).hexdigest()
+    清单.write_text(json.dumps(内容), encoding="utf-8")
+    候选 = 读取BTC候选策略(根目录)
+    目标 = tmp_path / "正式.set"
+    目标.write_text("old", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="拒绝覆盖"):
+        生成BTC正式运行参数(候选, 目标, "a" * 64)
 
 def test_部署预检全部目标以避免部分复制(tmp_path: Path) -> None:
     候选 = 读取BTC候选策略(_构造候选(tmp_path / "候选"))

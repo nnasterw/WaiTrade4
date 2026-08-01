@@ -51,6 +51,18 @@ class BTC候选实际二进制:
 
 
 @dataclass(frozen=True)
+class BTC正式运行参数:
+    """一次正式验收实际加载的、不可覆盖的参数副本身份。"""
+
+    来源路径: Path
+    来源哈希: str
+    运行路径: Path
+    运行哈希: str
+    审计运行标识: str
+    替换字段: tuple[str, str] = ("InpRiskPercent", "InpWT4审计运行标识")
+
+
+@dataclass(frozen=True)
 class MT5候选策略编译配置:
     """受控 MetaEditor 编译所需的单一隔离终端身份。"""
 
@@ -146,6 +158,55 @@ def 读取BTC候选策略(根目录: Path = BTC候选策略目录) -> BTC候选�
         冻结来源标识=冻结来源标识,
         冻结文件哈希=冻结文件哈希,
         可执行源码哈希={str(路径): _哈希(可执行目录 / 路径) for 路径 in 可执行源码},
+    )
+
+
+def 生成BTC正式运行参数(
+    候选: BTC候选策略,
+    目标路径: Path,
+    审计运行标识: str,
+) -> BTC正式运行参数:
+    """从冻结 R21 参数生成唯一正式副本，只允许写入两项运行期字段。
+
+    正式验收的风险目标是 3%，不能直接修改冻结迁移物，也不能复用共享
+    Tester 参数文件。审计标识则把 EA 输出的逐 tick 工件绑定到本次实验。
+    """
+    if not re.fullmatch(r"[0-9a-f]{64}", 审计运行标识):
+        raise ValueError("正式审计运行标识必须是64位小写SHA-256")
+    来源相对路径 = "参数/V11-BTC-M5-R21.set"
+    try:
+        预期哈希 = 候选.冻结文件哈希[来源相对路径]
+    except KeyError as 异常:
+        raise ValueError("冻结候选缺少 R21 参数来源") from 异常
+    来源路径 = 候选.根目录 / "冻结迁移" / 来源相对路径
+    if not 来源路径.is_file() or 来源路径.is_symlink() or _哈希(来源路径) != 预期哈希:
+        raise ValueError("冻结 R21 参数哈希不一致")
+    目标路径 = 目标路径.resolve()
+    if 目标路径.exists() or 目标路径.is_symlink():
+        raise ValueError(f"拒绝覆盖既有正式运行参数: {目标路径}")
+    if 目标路径.suffix != ".set":
+        raise ValueError("正式运行参数必须使用 .set 后缀")
+    原内容 = 来源路径.read_text(encoding="utf-8")
+    新内容, 风险替换数 = re.subn(
+        r"(?m)^InpRiskPercent=[^\r\n]*$", "InpRiskPercent=3.0", 原内容
+    )
+    新内容, 审计替换数 = re.subn(
+        r"(?m)^InpWT4审计运行标识=[^\r\n]*$",
+        f"InpWT4审计运行标识={审计运行标识}",
+        新内容,
+    )
+    if 风险替换数 != 1 or 审计替换数 != 1:
+        raise ValueError(
+            f"正式参数必须各包含一次风险和审计字段: 风险={风险替换数}, 审计={审计替换数}"
+        )
+    目标路径.parent.mkdir(parents=True, exist_ok=True)
+    目标路径.write_text(新内容, encoding="utf-8")
+    return BTC正式运行参数(
+        来源路径=来源路径,
+        来源哈希=_哈希(来源路径),
+        运行路径=目标路径,
+        运行哈希=_哈希(目标路径),
+        审计运行标识=审计运行标识,
     )
 
 
