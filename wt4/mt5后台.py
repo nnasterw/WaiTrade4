@@ -420,23 +420,50 @@ class MT5后台进程:
     def 等待(self, 超时秒数: int) -> int | None:
         if 超时秒数 <= 0:
             raise ValueError("后台 MT5 等待超时必须为正")
-        try:
-            返回码 = self._进程.wait(timeout=超时秒数)
-            内容 = self._读取归属记录(self.归属记录)
-            if 内容 is not None and 内容.get("状态") == "运行中":
-                self._更新归属记录状态(self.归属记录, 内容, "已退出")
-            return 返回码
-        except subprocess.TimeoutExpired:
-            return None
+        # Wine 有时会在 terminal64.exe 真正结束前让启动包装进程返回 0。
+        # 不能仅凭包装进程的返回码就收集报告或关闭 wineserver：只要同一
+        # 独立进程组中仍有命令行带本轮不可变身份的成员，就持续等待。
+        # 这也使超时后的受限进程组回收能够覆盖该已脱离包装进程的终端。
+        截止 = monotonic() + 超时秒数
+        返回码: int | None = None
+        while monotonic() < 截止:
+            当前返回码 = self._进程.poll()
+            if 当前返回码 is not None:
+                返回码 = 当前返回码
+                if not self._仍有自有进程组成员():
+                    内容 = self._读取归属记录(self.归属记录)
+                    if 内容 is not None and 内容.get("状态") == "运行中":
+                        self._更新归属记录状态(self.归属记录, 内容, "已退出")
+                    return 返回码
+            sleep(0.1)
+        return None
+
+    def _仍有自有进程组成员(self) -> bool:
+        """仅在本轮身份仍出现在本对象进程组时继续等待或回收。"""
+        if self._进程组号 is None:
+            return False
+        内容 = self._读取归属记录(self.归属记录)
+        if 内容 is None or 内容.get("状态") != "运行中":
+            return False
+        验证片段 = str(内容["命令验证片段"])
+        return any(验证片段 in 命令 for _, 命令 in self._进程组成员(self._进程组号))
 
     def 终止自有进程组(self) -> None:
-        if self._进程.poll() is not None:
-            return
         if os.name == "posix":
             assert self._进程组号 == self._进程.pid
-            os.killpg(self._进程组号, signal.SIGTERM)
+            # 包装进程已退出时，仍可能有携带本轮 config 身份的 terminal64
+            # 留在同一进程组。确认归属后才允许终止该组，绝不按 Wine/MT5
+            # 进程名扫描或影响其他实例。
+            # 组长仍存活时，这是本对象刚创建的进程组，可直接终止；组长
+            # 已退出则退化为归属身份校验，避免按已复用的 PGID 误伤。
+            if self._进程.poll() is None or self._仍有自有进程组成员():
+                try:
+                    os.killpg(self._进程组号, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
         else:
-            self._进程.terminate()
+            if self._进程.poll() is None:
+                self._进程.terminate()
 
     def 输出文本(self) -> tuple[str, str]:
         return (

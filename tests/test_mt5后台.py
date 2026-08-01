@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import sys
+from time import monotonic, sleep
 
 from wt4.mt5后台 import MT5后台进程
 
@@ -38,6 +39,49 @@ def test_超时后只终止自身进程组(tmp_path: Path) -> None:
 
     assert 返回码 is not None
     assert 进程.快照().状态 == "已退出"
+
+
+def test_包装进程退出后仍等待携带本轮身份的子进程(tmp_path: Path) -> None:
+    实验目录 = tmp_path / ("h" * 64)
+    实验目录.mkdir()
+    子进程代码 = "import time; time.sleep(0.35)"
+    启动代码 = (
+        "import subprocess, sys; "
+        f"subprocess.Popen([sys.executable, '-c', {子进程代码!r}, {实验目录.name!r}])"
+    )
+    进程 = MT5后台进程.启动(
+        (sys.executable, "-c", 启动代码, 实验目录.name),
+        实验目录,
+        dict(os.environ),
+        实验目录,
+    )
+
+    开始 = monotonic()
+    assert 进程.等待(3) == 0
+    assert monotonic() - 开始 >= 0.25
+    内容 = json.loads((实验目录 / "后台-归属.json").read_text(encoding="utf-8"))
+    assert 内容["状态"] == "已退出"
+
+
+def test_包装进程退出后仍可受限终止携带本轮身份的子进程(tmp_path: Path) -> None:
+    实验目录 = tmp_path / ("i" * 64)
+    实验目录.mkdir()
+    启动代码 = (
+        "import subprocess, sys; "
+        f"subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)', {实验目录.name!r}])"
+    )
+    进程 = MT5后台进程.启动(
+        (sys.executable, "-c", 启动代码, 实验目录.name),
+        实验目录,
+        dict(os.environ),
+        实验目录,
+    )
+
+    sleep_开始 = monotonic()
+    while not 进程._仍有自有进程组成员() and monotonic() - sleep_开始 < 2:
+        sleep(0.02)
+    进程.终止自有进程组()
+    assert 进程.等待(3) is not None
 
 
 def test_归属记录仅在命令仍携带实验身份时受限回收进程组(tmp_path: Path) -> None:
